@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -110,12 +110,17 @@ class ToolManifestRead(BaseModel):
 
 class ToolRunRequest(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
+    confirmed: bool = False
 
 
 class ToolRunResponse(BaseModel):
     tool_name: str
-    duration_ms: int
-    output: Any
+    status: str = "success"
+    output: Any = None
+    output_summary: str | None = None
+    error: str | None = None
+    duration_ms: int = 0
+    trace_id: str = Field(default_factory=lambda: uuid4().hex)
 
 
 class KnowledgeDocumentCreate(BaseModel):

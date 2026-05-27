@@ -1,7 +1,9 @@
 import asyncio
+import json
 from collections.abc import Mapping
 from time import perf_counter
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -14,25 +16,67 @@ class ToolExecutor:
     def __init__(self) -> None:
         self.settings = get_settings()
 
-    async def run(self, tool: RegisteredTool, arguments: dict[str, Any]) -> ToolRunResponse:
-        self._validate_arguments(tool, arguments)
-        timeout = min(tool.manifest.timeout_seconds, self.settings.tool_timeout_seconds)
+    async def run(
+        self,
+        tool: RegisteredTool,
+        arguments: dict[str, Any],
+        *,
+        confirmed: bool = False,
+    ) -> ToolRunResponse:
+        trace_id = uuid4().hex
         started = perf_counter()
+        if not tool.manifest.enabled:
+            return self._response(tool, "failed", started, trace_id, error="Tool is disabled")
+        if tool.manifest.requires_confirmation and not confirmed:
+            return self._response(
+                tool,
+                "failed",
+                started,
+                trace_id,
+                error="Tool requires confirmation before execution",
+            )
+
         try:
+            self._validate_arguments(tool, arguments)
+            timeout = min(tool.manifest.timeout_seconds, self.settings.tool_timeout_seconds)
             output = await asyncio.wait_for(
                 asyncio.to_thread(tool.handler, **arguments),
                 timeout=timeout,
             )
-        except TimeoutError as exc:
-            raise HTTPException(status_code=408, detail="Tool execution timed out") from exc
-        except TypeError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except TimeoutError:
+            return self._response(
+                tool,
+                "timeout",
+                started,
+                trace_id,
+                error="Tool execution timed out",
+            )
+        except HTTPException as exc:
+            return self._response(tool, "failed", started, trace_id, error=str(exc.detail))
+        except Exception as exc:
+            return self._response(tool, "failed", started, trace_id, error=str(exc))
 
-        duration_ms = int((perf_counter() - started) * 1000)
+        limited_output = self._limit_output(tool, output)
+        return self._response(tool, "success", started, trace_id, output=limited_output)
+
+    def _response(
+        self,
+        tool: RegisteredTool,
+        status: str,
+        started: float,
+        trace_id: str,
+        *,
+        output: Any = None,
+        error: str | None = None,
+    ) -> ToolRunResponse:
         return ToolRunResponse(
             tool_name=tool.manifest.name,
-            duration_ms=duration_ms,
-            output=self._limit_output(output),
+            status=status,
+            output=output,
+            output_summary=self._summarize(output),
+            error=error,
+            duration_ms=int((perf_counter() - started) * 1000),
+            trace_id=trace_id,
         )
 
     def _validate_arguments(self, tool: RegisteredTool, arguments: dict[str, Any]) -> None:
@@ -109,8 +153,8 @@ class ToolExecutor:
             return True
         return True
 
-    def _limit_output(self, output: Any) -> Any:
-        max_chars = self.settings.max_tool_output_chars
+    def _limit_output(self, tool: RegisteredTool, output: Any) -> Any:
+        max_chars = self._output_limit(tool)
         if isinstance(output, str):
             return output[:max_chars]
         if isinstance(output, dict):
@@ -119,3 +163,22 @@ class ToolExecutor:
                 for key, value in output.items()
             }
         return output
+
+    def _output_limit(self, tool: RegisteredTool) -> int:
+        policy_limit = tool.manifest.output_strategy.get("max_chars")
+        if isinstance(policy_limit, int) and policy_limit > 0:
+            return min(policy_limit, self.settings.max_tool_output_chars)
+        return self.settings.max_tool_output_chars
+
+    def _summarize(self, output: Any) -> str | None:
+        if output is None:
+            return None
+        if isinstance(output, str):
+            text = output
+        else:
+            try:
+                text = json.dumps(output, ensure_ascii=False, default=str)
+            except TypeError:
+                text = str(output)
+        max_chars = min(self.settings.max_tool_output_chars, 500)
+        return text[:max_chars]
