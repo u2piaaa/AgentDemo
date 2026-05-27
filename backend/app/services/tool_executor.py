@@ -3,11 +3,13 @@ import json
 from collections.abc import Mapping
 from time import perf_counter
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.models.tool import ToolCall
 from app.schemas import ToolRunResponse
 from app.services.plugin_registry import RegisteredTool
 
@@ -22,19 +24,31 @@ class ToolExecutor:
         arguments: dict[str, Any],
         *,
         confirmed: bool = False,
+        session: AsyncSession | None = None,
+        user_id: UUID | None = None,
+        conversation_id: UUID | None = None,
+        task_id: UUID | None = None,
     ) -> ToolRunResponse:
         trace_id = uuid4().hex
         started = perf_counter()
         if not tool.manifest.enabled:
-            return self._response(tool, "failed", started, trace_id, error="Tool is disabled")
+            response = self._response(tool, "failed", started, trace_id, error="Tool is disabled")
+            await self._record_audit(
+                session, tool, arguments, response, user_id, conversation_id, task_id
+            )
+            return response
         if tool.manifest.requires_confirmation and not confirmed:
-            return self._response(
+            response = self._response(
                 tool,
                 "failed",
                 started,
                 trace_id,
                 error="Tool requires confirmation before execution",
             )
+            await self._record_audit(
+                session, tool, arguments, response, user_id, conversation_id, task_id
+            )
+            return response
 
         try:
             self._validate_arguments(tool, arguments)
@@ -44,20 +58,34 @@ class ToolExecutor:
                 timeout=timeout,
             )
         except TimeoutError:
-            return self._response(
+            response = self._response(
                 tool,
                 "timeout",
                 started,
                 trace_id,
                 error="Tool execution timed out",
             )
+            await self._record_audit(
+                session, tool, arguments, response, user_id, conversation_id, task_id
+            )
+            return response
         except HTTPException as exc:
-            return self._response(tool, "failed", started, trace_id, error=str(exc.detail))
+            response = self._response(tool, "failed", started, trace_id, error=str(exc.detail))
+            await self._record_audit(
+                session, tool, arguments, response, user_id, conversation_id, task_id
+            )
+            return response
         except Exception as exc:
-            return self._response(tool, "failed", started, trace_id, error=str(exc))
+            response = self._response(tool, "failed", started, trace_id, error=str(exc))
+            await self._record_audit(
+                session, tool, arguments, response, user_id, conversation_id, task_id
+            )
+            return response
 
         limited_output = self._limit_output(tool, output)
-        return self._response(tool, "success", started, trace_id, output=limited_output)
+        response = self._response(tool, "success", started, trace_id, output=limited_output)
+        await self._record_audit(session, tool, arguments, response, user_id, conversation_id, task_id)
+        return response
 
     def _response(
         self,
@@ -182,3 +210,32 @@ class ToolExecutor:
                 text = str(output)
         max_chars = min(self.settings.max_tool_output_chars, 500)
         return text[:max_chars]
+
+    async def _record_audit(
+        self,
+        session: AsyncSession | None,
+        tool: RegisteredTool,
+        arguments: dict[str, Any],
+        response: ToolRunResponse,
+        user_id: UUID | None,
+        conversation_id: UUID | None,
+        task_id: UUID | None,
+    ) -> None:
+        if session is None:
+            return
+        session.add(
+            ToolCall(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                task_id=task_id,
+                tool_name=tool.manifest.name,
+                status=response.status,
+                input=arguments,
+                input_summary=self._summarize(arguments),
+                output_summary=response.output_summary,
+                error=response.error,
+                duration_ms=response.duration_ms,
+                trace_id=response.trace_id,
+            )
+        )
+        await session.commit()
