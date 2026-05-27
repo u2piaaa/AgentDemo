@@ -73,4 +73,5 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     progress: Mapped[int] = mapped_column(default=0)
     error: Mapped[str | None] = mapped_column(Text)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    trace_id: Mapped[str | None] = mapped_column(String(80), index=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict)

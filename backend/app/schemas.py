@@ -81,6 +81,7 @@ class TaskRead(BaseModel):
     progress: int
     error: str | None
     result: dict[str, Any] | None
+    trace_id: str | None
     metadata_: dict[str, Any] = Field(serialization_alias="metadata")
     created_at: datetime
 
@@ -88,6 +89,7 @@ class TaskRead(BaseModel):
 class TaskCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     conversation_id: UUID | None = None
+    trace_id: str | None = Field(default=None, max_length=80)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -96,6 +98,7 @@ class TaskUpdate(BaseModel):
     progress: int | None = Field(default=None, ge=0, le=100)
     error: str | None = None
     result: dict[str, Any] | None = None
+    trace_id: str | None = Field(default=None, max_length=80)
     metadata: dict[str, Any] | None = None
 
     @field_validator("status")

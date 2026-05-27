@@ -47,6 +47,7 @@ async def create_task(
         conversation_id=payload.conversation_id,
         status=TASK_STATUS_QUEUED,
         progress=0,
+        trace_id=payload.trace_id,
         metadata_=payload.metadata,
     )
     session.add(task)
@@ -86,6 +87,8 @@ async def update_task(
         task.error = payload.error
     if payload.result is not None:
         task.result = payload.result
+    if payload.trace_id is not None:
+        task.trace_id = payload.trace_id
     if payload.metadata is not None:
         task.metadata_ = payload.metadata
     await session.commit()

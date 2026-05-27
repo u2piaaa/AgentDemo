@@ -71,6 +71,7 @@ def make_task(user_id: UUID, conversation_id: UUID | None = None):
         progress=0,
         error=None,
         result=None,
+        trace_id=None,
         metadata_={},
         created_at=datetime.now(UTC),
     )
@@ -89,14 +90,16 @@ def test_task_payload_defaults() -> None:
     payload = TaskCreate(name="Index document")
 
     assert payload.conversation_id is None
+    assert payload.trace_id is None
     assert payload.metadata == {}
 
 
 def test_task_update_accepts_progress() -> None:
-    payload = TaskUpdate(status="running", progress=50)
+    payload = TaskUpdate(status="running", progress=50, trace_id="trace-1")
 
     assert payload.status == "running"
     assert payload.progress == 50
+    assert payload.trace_id == "trace-1"
 
 
 def test_task_update_rejects_unknown_status() -> None:
@@ -174,6 +177,20 @@ def test_create_task_assigns_current_user() -> None:
     assert session.added.conversation_id == conversation_id
 
 
+def test_create_task_accepts_trace_id() -> None:
+    user = SimpleNamespace(id=uuid4())
+    session = FakeSession()
+    client = make_client(session, user)
+
+    response = client.post(
+        "/api/tasks",
+        json={"name": "Index document", "trace_id": "trace-create"},
+    )
+
+    assert response.status_code == 200
+    assert session.added.trace_id == "trace-create"
+
+
 def test_get_task_rejects_other_users_task() -> None:
     user = SimpleNamespace(id=uuid4())
     session = FakeSession(
@@ -209,13 +226,28 @@ def test_update_task_allows_owner() -> None:
     )
     client = make_client(session, user)
 
-    response = client.patch(f"/api/tasks/{task.id}", json={"status": "running", "progress": 20})
+    response = client.patch(
+        f"/api/tasks/{task.id}",
+        json={
+            "status": "running",
+            "progress": 20,
+            "result": {"ok": True},
+            "error": "partial warning",
+            "trace_id": "trace-update",
+        },
+    )
 
     assert response.status_code == 200
     assert response.json()["status"] == "running"
     assert response.json()["progress"] == 20
+    assert response.json()["result"] == {"ok": True}
+    assert response.json()["error"] == "partial warning"
+    assert response.json()["trace_id"] == "trace-update"
     assert task.status == "running"
     assert task.progress == 20
+    assert task.result == {"ok": True}
+    assert task.error == "partial warning"
+    assert task.trace_id == "trace-update"
 
 
 def test_update_task_rejects_invalid_status_transition() -> None:
