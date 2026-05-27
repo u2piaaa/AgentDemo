@@ -24,8 +24,6 @@ class AccessTokenMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if request.url.path == "/api/health" or request.url.path.startswith("/api/auth"):
             return await call_next(request)
-        if request.headers.get("authorization", "").startswith("Bearer "):
-            return await call_next(request)
         token = request.headers.get("x-agent-access-token")
         if token != settings.agent_access_token:
             return JSONResponse({"detail": "Invalid access token"}, status_code=401)
