@@ -19,6 +19,10 @@
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
@@ -33,6 +37,7 @@ input {
 
 button {
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 button:focus-visible,
@@ -135,6 +140,7 @@ input:focus-visible {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .brand h1,
@@ -364,6 +370,21 @@ input:focus-visible {
   background: var(--surface);
   color: #263746;
   font-size: 14px;
+}
+
+.topbar-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.mobile-menu-button,
+.mobile-inspector-button,
+.sidebar-close,
+.inspector-mobile-header,
+.mobile-scrim {
+  display: none;
 }
 
 .spin {
@@ -628,7 +649,7 @@ input:focus-visible {
   place-items: center;
   padding: 18px;
   background: rgba(16, 27, 36, 0.46);
-  z-index: 20;
+  z-index: 60;
 }
 
 .confirm-dialog {
@@ -665,64 +686,287 @@ input:focus-visible {
 }
 
 @media (max-width: 1040px) {
+  .content-grid {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+}
+
+@media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
   }
 
   .sidebar {
-    position: static;
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(340px, 88vw);
+    padding: calc(18px + env(safe-area-inset-top)) 16px calc(18px + env(safe-area-inset-bottom));
+    box-shadow: 18px 0 44px rgba(13, 25, 36, 0.24);
+    transform: translateX(-105%);
+    transition: transform 220ms ease;
   }
 
-  .conversation-list {
-    flex-direction: row;
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-close {
+    display: inline-flex;
+    width: 44px;
+    height: 44px;
+    margin-left: auto;
+    border-color: #365569;
+    background: rgba(255, 255, 255, 0.06);
+    color: #f8fbfd;
   }
 
   .conversation {
-    min-width: 180px;
+    min-width: 0;
+  }
+
+  .workspace {
+    min-height: 100dvh;
+  }
+
+  .topbar {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: calc(10px + env(safe-area-inset-top)) 12px 10px;
+  }
+
+  .topbar h2 {
+    font-size: 19px;
+  }
+
+  .mobile-menu-button,
+  .mobile-inspector-button {
+    display: inline-flex;
+    width: 44px;
+    height: 44px;
+  }
+
+  .title-editor {
+    gap: 6px;
+  }
+
+  .title-editor input {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+  }
+
+  .runtime-state {
+    max-width: 148px;
+    overflow: hidden;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .content-grid {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+    padding: 0;
+    background: var(--surface);
   }
 
-  .chat-panel,
+  .chat-panel {
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .message-list {
+    gap: 10px;
+    padding: 16px 12px 18px;
+  }
+
+  .message {
+    max-width: min(92%, 680px);
+    padding: 11px 12px;
+  }
+
+  .empty-state {
+    padding: 20px;
+  }
+
+  .empty-state h3 {
+    font-size: 18px;
+  }
+
+  .composer {
+    grid-template-columns: minmax(0, 1fr) 52px;
+    gap: 8px;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .composer label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .upload-row {
+    grid-column: 1 / -1;
+    align-items: center;
+  }
+
+  .upload-row span {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .upload-button {
+    flex: 0 0 auto;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 12px;
+  }
+
+  .composer textarea {
+    min-height: 48px;
+    max-height: 32dvh;
+    resize: none;
+  }
+
+  .send-button {
+    width: 52px;
+    min-width: 52px;
+    min-height: 48px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .send-button svg {
+    width: 20px;
+    height: 20px;
+  }
+
   .inspector {
-    min-height: auto;
-    max-height: none;
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 35;
+    max-height: min(76dvh, 720px);
+    border-radius: 16px 16px 0 0;
+    padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+    box-shadow: 0 -22px 48px rgba(17, 32, 46, 0.2);
+    transform: translateY(calc(100% + 24px));
+    transition: transform 220ms ease;
+  }
+
+  .inspector.mobile-open {
+    transform: translateY(0);
+  }
+
+  .inspector-mobile-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 4px;
+  }
+
+  .inspector-mobile-header h2 {
+    margin: 0;
+    color: #172633;
+    font-size: 18px;
+  }
+
+  .mobile-scrim {
+    position: fixed;
+    inset: 0;
+    display: block;
+    border: 0;
+    background: rgba(16, 27, 36, 0.48);
+    z-index: 25;
   }
 }
 
 @media (max-width: 640px) {
-  .topbar,
-  .composer {
-    grid-template-columns: 1fr;
+  .auth-screen {
+    align-items: stretch;
+    place-items: stretch;
+    padding: 14px;
+  }
+
+  .auth-panel {
+    align-self: center;
+    padding: 20px;
   }
 
   .topbar {
-    align-items: flex-start;
-    flex-direction: column;
-    padding: 18px;
+    grid-template-columns: 44px minmax(0, 1fr) auto;
   }
 
-  .content-grid {
-    padding: 12px;
+  .conversation-heading {
+    gap: 2px;
+  }
+
+  .eyebrow {
+    font-size: 12px;
+  }
+
+  .runtime-state {
+    display: none;
   }
 
   .message {
-    max-width: 100%;
-  }
-
-  .send-button {
-    width: 100%;
+    max-width: 96%;
   }
 
   .upload-row {
-    align-items: stretch;
-    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .upload-row span {
+    font-size: 12px;
+  }
+
+  .confirm-actions {
+    flex-direction: column-reverse;
+  }
+
+  .confirm-actions .text-button,
+  .danger-action {
+    width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  .topbar {
+    gap: 8px;
+  }
+
+  .topbar h2 {
+    font-size: 17px;
+  }
+
+  .title-row {
+    gap: 4px;
+  }
+
+  .title-row .icon-button,
+  .title-editor .icon-button {
+    width: 36px;
+    height: 36px;
   }
 
   .upload-button {
-    width: 100%;
+    width: 44px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .upload-row span {
+    white-space: normal;
   }
 }
 

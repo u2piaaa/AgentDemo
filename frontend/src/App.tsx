@@ -10,6 +10,7 @@ import {
   Loader2,
   LogIn,
   LogOut,
+  Menu,
   MessageSquarePlus,
   Send,
   Settings2,
@@ -97,6 +98,8 @@ export function App() {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [conversationToDelete, setConversationToDelete] = useState<Conversation | null>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -171,6 +174,12 @@ export function App() {
     setCitations([]);
     setDocuments([]);
     setUploadStatus("No document uploaded in this chat.");
+    setIsSidebarOpen(false);
+  }
+
+  function handleSelectConversation(conversationId: string) {
+    setActiveConversationId(conversationId);
+    setIsSidebarOpen(false);
   }
 
   async function handleAuthSubmit(event: FormEvent) {
@@ -203,6 +212,8 @@ export function App() {
     setDocuments([]);
     setCitations([]);
     setStatus("Idle");
+    setIsSidebarOpen(false);
+    setIsInspectorOpen(false);
   }
 
   async function handleDeleteConversation() {
@@ -396,13 +407,22 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar" aria-label="Conversations">
+      <aside className={isSidebarOpen ? "sidebar mobile-open" : "sidebar"} aria-label="Conversations">
         <div className="brand">
           <Bot size={24} aria-hidden="true" />
           <div>
             <h1>Personal Agent</h1>
             <p>{currentUser.username}</p>
           </div>
+          <button
+            className="icon-button sidebar-close"
+            type="button"
+            aria-label="Close conversations"
+            title="Close conversations"
+            onClick={() => setIsSidebarOpen(false)}
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
         </div>
         <button className="secondary-action" onClick={handleLogout}>
           <LogOut size={18} aria-hidden="true" />
@@ -418,7 +438,7 @@ export function App() {
               className={conversation.id === activeConversationId ? "conversation active" : "conversation"}
               key={conversation.id}
             >
-              <button className="conversation-select" onClick={() => setActiveConversationId(conversation.id)}>
+              <button className="conversation-select" onClick={() => handleSelectConversation(conversation.id)}>
                 <span>{conversation.title}</span>
               </button>
               <button
@@ -438,6 +458,15 @@ export function App() {
 
       <section className="workspace" aria-label="Chat workspace">
         <header className="topbar">
+          <button
+            className="icon-button mobile-menu-button"
+            type="button"
+            aria-label="Open conversations"
+            title="Open conversations"
+            onClick={() => setIsSidebarOpen(true)}
+          >
+            <Menu size={20} aria-hidden="true" />
+          </button>
           <div className="conversation-heading">
             <p className="eyebrow">Conversation</p>
             {isEditingTitle ? (
@@ -482,9 +511,20 @@ export function App() {
               </div>
             )}
           </div>
-          <div className="runtime-state" aria-live="polite">
-            {isStreaming ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <CircleDot size={16} />}
-            {status}
+          <div className="topbar-actions">
+            <button
+              className="icon-button mobile-inspector-button"
+              type="button"
+              aria-label="Open runtime details"
+              title="Open runtime details"
+              onClick={() => setIsInspectorOpen(true)}
+            >
+              <Settings2 size={18} aria-hidden="true" />
+            </button>
+            <div className="runtime-state" aria-live="polite">
+              {isStreaming ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <CircleDot size={16} />}
+              {status}
+            </div>
           </div>
         </header>
 
@@ -536,7 +576,19 @@ export function App() {
             </form>
           </section>
 
-          <aside className="inspector" aria-label="Runtime inspector">
+          <aside className={isInspectorOpen ? "inspector mobile-open" : "inspector"} aria-label="Runtime inspector">
+            <div className="inspector-mobile-header">
+              <h2>Runtime details</h2>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Close runtime details"
+                title="Close runtime details"
+                onClick={() => setIsInspectorOpen(false)}
+              >
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
             <section>
               <div className="section-title">
                 <FileUp size={18} aria-hidden="true" />
@@ -616,6 +668,17 @@ export function App() {
           </aside>
         </div>
       </section>
+      {isSidebarOpen || isInspectorOpen ? (
+        <button
+          className="mobile-scrim"
+          type="button"
+          aria-label="Close mobile panel"
+          onClick={() => {
+            setIsSidebarOpen(false);
+            setIsInspectorOpen(false);
+          }}
+        />
+      ) : null}
       {conversationToDelete ? (
         <div className="confirm-backdrop" role="presentation">
           <div
