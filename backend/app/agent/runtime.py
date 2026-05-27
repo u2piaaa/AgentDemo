@@ -15,12 +15,16 @@ from app.services.rag import RagService
 
 class AgentRuntime:
     def __init__(
-        self, session: AsyncSession, plugin_registry: PluginRegistry, user_id: UUID | None = None
+        self,
+        session: AsyncSession,
+        plugin_registry: PluginRegistry,
+        user_id: UUID | None = None,
+        model_gateway: ModelGateway | None = None,
     ) -> None:
         self.session = session
         self.plugin_registry = plugin_registry
         self.user_id = user_id
-        self.model_gateway = ModelGateway()
+        self.model_gateway = model_gateway or ModelGateway()
         self.rag = RagService(session)
         self.settings = get_settings()
 
