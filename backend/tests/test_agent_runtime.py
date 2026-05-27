@@ -35,6 +35,9 @@ class FakeSession:
         self.items.append(item)
 
     async def flush(self) -> None:
+        for item in self.items:
+            if isinstance(item, Conversation) and item.id is None:
+                item.id = uuid4()
         return None
 
     async def commit(self) -> None:
