@@ -304,9 +304,9 @@ class AgentRuntime:
         lowered = clean.lower()
         for prefix in sorted(prefixes, key=len, reverse=True):
             if lowered.startswith(prefix):
-                clean = clean[len(prefix) :].strip(" ：:，,。.!！?")
+                clean = clean[len(prefix) :].strip(" ：:，,。.!！?？")
                 break
-        return clean[:40].rstrip(" ：:，,。.!！?") or "New conversation"
+        return clean[:40].rstrip(" ：:，,。.!！?？") or "New conversation"
 
     async def _save_message(
         self,
