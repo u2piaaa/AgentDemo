@@ -114,6 +114,7 @@ def test_task_update_rejects_unknown_status() -> None:
         ("POST", "/api/tasks", {"name": "Index document"}),
         ("GET", f"/api/tasks/{uuid4()}", None),
         ("PATCH", f"/api/tasks/{uuid4()}", {"progress": 20}),
+        ("POST", f"/api/tasks/{uuid4()}/cancel", None),
     ],
 )
 def test_task_routes_require_login(method: str, path: str, json_body: dict | None) -> None:
@@ -261,6 +262,53 @@ def test_update_task_rejects_invalid_status_transition() -> None:
     client = make_client(session, user)
 
     response = client.patch(f"/api/tasks/{task.id}", json={"status": "running"})
+
+    assert response.status_code == 409
+    assert task.status == "succeeded"
+
+
+def test_cancel_task_allows_owner() -> None:
+    user = SimpleNamespace(id=uuid4())
+    task = make_task(user.id)
+    session = FakeSession(
+        results=[FakeResult(scalar=task)],
+        expected_filters=[("tasks.user_id", user.id)],
+    )
+    client = make_client(session, user)
+
+    response = client.post(f"/api/tasks/{task.id}/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    assert task.status == "cancelled"
+    assert session.committed is True
+
+
+def test_cancel_task_rejects_other_users_task() -> None:
+    user = SimpleNamespace(id=uuid4())
+    session = FakeSession(
+        results=[FakeResult(scalar=None)],
+        expected_filters=[("tasks.user_id", user.id)],
+    )
+    client = make_client(session, user)
+
+    response = client.post(f"/api/tasks/{uuid4()}/cancel")
+
+    assert response.status_code == 404
+    assert session.committed is False
+
+
+def test_cancel_task_rejects_terminal_task() -> None:
+    user = SimpleNamespace(id=uuid4())
+    task = make_task(user.id)
+    task.status = "succeeded"
+    session = FakeSession(
+        results=[FakeResult(scalar=task)],
+        expected_filters=[("tasks.user_id", user.id)],
+    )
+    client = make_client(session, user)
+
+    response = client.post(f"/api/tasks/{task.id}/cancel")
 
     assert response.status_code == 409
     assert task.status == "succeeded"

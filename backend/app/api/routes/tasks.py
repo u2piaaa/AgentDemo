@@ -8,6 +8,7 @@ from app.api.routes.auth import CurrentUser
 from app.db.database import get_session
 from app.models.conversation import Conversation
 from app.models.task import (
+    TASK_STATUS_CANCELLED,
     TASK_STATUS_QUEUED,
     Task,
     is_valid_task_status_transition,
@@ -91,6 +92,22 @@ async def update_task(
         task.trace_id = payload.trace_id
     if payload.metadata is not None:
         task.metadata_ = payload.metadata
+    await session.commit()
+    await session.refresh(task)
+    return task
+
+
+@router.post("/{task_id}/cancel", response_model=TaskRead)
+async def cancel_task(
+    task_id: UUID,
+    current_user: CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> Task:
+    task = await get_owned_task(session, task_id, current_user.id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    validate_task_transition(task, TASK_STATUS_CANCELLED)
+    task.status = TASK_STATUS_CANCELLED
     await session.commit()
     await session.refresh(task)
     return task
