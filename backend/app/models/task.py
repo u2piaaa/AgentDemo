@@ -11,6 +11,9 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "tasks"
 
+    user_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     conversation_id: Mapped[UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), index=True
     )
