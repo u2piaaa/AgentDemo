@@ -60,6 +60,27 @@ class ChatEvent(BaseModel):
     data: dict[str, Any]
 
 
+class AgentToolPlan(BaseModel):
+    no_tool: bool = True
+    tool_name: str | None = None
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+    requires_confirmation: bool = False
+
+
+class AgentExecutionState(BaseModel):
+    user_id: UUID | None = None
+    conversation_id: UUID | None = None
+    message: str
+    history: list[dict[str, str]] = Field(default_factory=list)
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    plan: AgentToolPlan = Field(default_factory=AgentToolPlan)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    observations: list[str] = Field(default_factory=list)
+    final_answer: str = ""
+    trace_id: str = Field(default_factory=lambda: uuid4().hex)
+
+
 class MessageRead(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
