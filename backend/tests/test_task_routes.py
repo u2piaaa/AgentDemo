@@ -140,6 +140,40 @@ def test_list_tasks_filters_to_current_user() -> None:
     assert [item["id"] for item in response.json()] == [str(task.id)]
 
 
+def test_list_tasks_filters_to_owned_conversation() -> None:
+    user = SimpleNamespace(id=uuid4())
+    conversation_id = uuid4()
+    conversation = SimpleNamespace(id=conversation_id, user_id=user.id)
+    task = make_task(user.id, conversation_id)
+    session = FakeSession(
+        results=[FakeResult(scalar=conversation), FakeResult(items=[task])],
+        expected_filters=[
+            ("conversations.user_id", user.id),
+            ("tasks.conversation_id", conversation_id),
+        ],
+    )
+    client = make_client(session, user)
+
+    response = client.get(f"/api/tasks?conversation_id={conversation_id}")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [str(task.id)]
+
+
+def test_list_tasks_rejects_unowned_conversation() -> None:
+    user = SimpleNamespace(id=uuid4())
+    conversation_id = uuid4()
+    session = FakeSession(
+        results=[FakeResult(scalar=None)],
+        expected_filters=[("conversations.user_id", user.id)],
+    )
+    client = make_client(session, user)
+
+    response = client.get(f"/api/tasks?conversation_id={conversation_id}")
+
+    assert response.status_code == 404
+
+
 def test_create_task_requires_owned_conversation() -> None:
     user = SimpleNamespace(id=uuid4())
     conversation_id = uuid4()

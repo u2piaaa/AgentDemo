@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,10 +21,17 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 @router.get("", response_model=list[TaskRead])
 async def list_tasks(
     current_user: CurrentUser,
+    conversation_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> list[Task]:
+    statement = select(Task).where(Task.user_id == current_user.id)
+    if conversation_id is not None:
+        conversation = await get_owned_conversation(session, conversation_id, current_user.id)
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        statement = statement.where(Task.conversation_id == conversation_id)
     result = await session.execute(
-        select(Task).where(Task.user_id == current_user.id).order_by(Task.created_at.desc())
+        statement.order_by(Task.created_at.desc())
     )
     return list(result.scalars().all())
 
