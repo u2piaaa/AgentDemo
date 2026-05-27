@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.routes.auth import CurrentUser
 from app.db.database import get_session
+from app.models.conversation import Conversation
 from app.models.task import Task
 from app.schemas import TaskCreate, TaskRead, TaskUpdate
 
@@ -12,18 +14,32 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
 @router.get("", response_model=list[TaskRead])
-async def list_tasks(session: AsyncSession = Depends(get_session)) -> list[Task]:
-    result = await session.execute(select(Task).order_by(Task.created_at.desc()))
+async def list_tasks(
+    current_user: CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> list[Task]:
+    result = await session.execute(
+        select(Task).where(Task.user_id == current_user.id).order_by(Task.created_at.desc())
+    )
     return list(result.scalars().all())
 
 
 @router.post("", response_model=TaskRead)
 async def create_task(
     payload: TaskCreate,
+    current_user: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ) -> Task:
+    if payload.conversation_id is not None:
+        conversation = await get_owned_conversation(
+            session, payload.conversation_id, current_user.id
+        )
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
     task = Task(
         name=payload.name,
+        user_id=current_user.id,
         conversation_id=payload.conversation_id,
         status="queued",
         progress=0,
@@ -36,8 +52,12 @@ async def create_task(
 
 
 @router.get("/{task_id}", response_model=TaskRead)
-async def get_task(task_id: UUID, session: AsyncSession = Depends(get_session)) -> Task:
-    task = await session.get(Task, task_id)
+async def get_task(
+    task_id: UUID,
+    current_user: CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> Task:
+    task = await get_owned_task(session, task_id, current_user.id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
@@ -47,9 +67,10 @@ async def get_task(task_id: UUID, session: AsyncSession = Depends(get_session)) 
 async def update_task(
     task_id: UUID,
     payload: TaskUpdate,
+    current_user: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ) -> Task:
-    task = await session.get(Task, task_id)
+    task = await get_owned_task(session, task_id, current_user.id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     if payload.status is not None:
@@ -65,3 +86,25 @@ async def update_task(
     await session.commit()
     await session.refresh(task)
     return task
+
+
+async def get_owned_conversation(
+    session: AsyncSession, conversation_id: UUID, user_id: UUID
+) -> Conversation | None:
+    result = await session.execute(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.user_id == user_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_owned_task(session: AsyncSession, task_id: UUID, user_id: UUID) -> Task | None:
+    result = await session.execute(
+        select(Task).where(
+            Task.id == task_id,
+            Task.user_id == user_id,
+        )
+    )
+    return result.scalar_one_or_none()
