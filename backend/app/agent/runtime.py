@@ -25,6 +25,7 @@ class AgentRuntime:
         model_gateway: ModelGateway | None = None,
         rag_service: RagService | None = None,
         tool_executor: ToolExecutor | None = None,
+        max_tool_rounds: int = 3,
     ) -> None:
         self.session = session
         self.plugin_registry = plugin_registry
@@ -32,6 +33,7 @@ class AgentRuntime:
         self.model_gateway = model_gateway or ModelGateway()
         self.rag = rag_service or RagService(session)
         self.tool_executor = tool_executor or ToolExecutor()
+        self.max_tool_rounds = max(max_tool_rounds, 0)
         self.settings = get_settings()
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[dict[str, str]]:
@@ -61,11 +63,8 @@ class AgentRuntime:
             await self._retrieve_context(request.message, conversation.id)
         )
 
-        yield self._event("status", {"label": "planning"})
         route = self.model_gateway.route(request.task_type, request.message)
-        state.plan = self._plan_next_step(state)
-        yield self._event("plan", state.plan.model_dump())
-        async for event in self._maybe_execute_tool(state):
+        async for event in self._run_tool_loop(state):
             yield event
 
         yield self._event("status", {"label": "generating", "model": route.model_name})
@@ -139,6 +138,26 @@ class AgentRuntime:
                 requires_confirmation=bool(tool and tool.manifest.requires_confirmation),
             )
         return AgentToolPlan(no_tool=True, reason="No tool is needed for this message.")
+
+    async def _run_tool_loop(
+        self, state: AgentExecutionState
+    ) -> AsyncIterator[dict[str, str]]:
+        rounds = 0
+        while rounds < self.max_tool_rounds:
+            yield self._event("status", {"label": "planning", "trace_id": state.trace_id})
+            state.plan = self._plan_next_step(state)
+            yield self._event("plan", state.plan.model_dump())
+            if state.plan.no_tool:
+                return
+            async for event in self._maybe_execute_tool(state):
+                yield event
+            rounds += 1
+
+        state.plan = AgentToolPlan(
+            no_tool=True,
+            reason=f"Stopped after the maximum of {self.max_tool_rounds} tool round(s).",
+        )
+        yield self._event("plan", state.plan.model_dump())
 
     async def _maybe_execute_tool(
         self, state: AgentExecutionState
