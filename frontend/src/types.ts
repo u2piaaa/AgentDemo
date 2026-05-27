@@ -5,6 +5,16 @@ export type Conversation = {
   updated_at: string;
 };
 
+export type User = {
+  id: string;
+  username: string;
+};
+
+export type AuthResponse = {
+  token: string;
+  user: User;
+};
+
 export type Message = {
   id: string;
   conversation_id: string;

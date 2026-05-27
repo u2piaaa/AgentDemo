@@ -1,24 +1,32 @@
-import type { Conversation, KnowledgeDocument, Message, StreamEvent, ToolManifest } from "./types";
+import type {
+  AuthResponse,
+  Conversation,
+  KnowledgeDocument,
+  Message,
+  StreamEvent,
+  ToolManifest,
+  User
+} from "./types";
 
 const jsonHeaders = { "Content-Type": "application/json" };
-let accessToken = sessionStorage.getItem("agent_access_token") ?? "";
+let authToken = localStorage.getItem("agent_auth_token") ?? "";
 
 function authHeaders(): Record<string, string> {
-  return accessToken ? { "x-agent-access-token": accessToken } : {};
+  return authToken ? { Authorization: `Bearer ${authToken}` } : {};
 }
 
 function jsonAuthHeaders(): Record<string, string> {
   return { ...jsonHeaders, ...authHeaders() };
 }
 
-export function setAccessToken(token: string) {
-  accessToken = token;
-  sessionStorage.setItem("agent_access_token", token);
+export function setAuthToken(token: string) {
+  authToken = token;
+  localStorage.setItem("agent_auth_token", token);
 }
 
-export function clearAccessToken() {
-  accessToken = "";
-  sessionStorage.removeItem("agent_access_token");
+export function clearAuthToken() {
+  authToken = "";
+  localStorage.removeItem("agent_auth_token");
 }
 
 export async function getAuthStatus(): Promise<{ required: boolean }> {
@@ -27,13 +35,30 @@ export async function getAuthStatus(): Promise<{ required: boolean }> {
   return response.json();
 }
 
-export async function checkAccessToken(token: string): Promise<boolean> {
-  const response = await fetch("/api/auth/check", {
+export async function register(username: string, password: string): Promise<AuthResponse> {
+  const response = await fetch("/api/auth/register", {
     method: "POST",
-    headers: { "x-agent-access-token": token }
+    headers: jsonHeaders,
+    body: JSON.stringify({ username, password })
   });
-  if (!response.ok) return false;
-  return (await response.json()).ok === true;
+  if (!response.ok) throw new Error(await readError(response, "Registration failed"));
+  return response.json();
+}
+
+export async function login(username: string, password: string): Promise<AuthResponse> {
+  const response = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ username, password })
+  });
+  if (!response.ok) throw new Error(await readError(response, "Login failed"));
+  return response.json();
+}
+
+export async function getCurrentUser(): Promise<User> {
+  const response = await fetch("/api/auth/me", { headers: authHeaders() });
+  if (!response.ok) throw new Error("Authentication required");
+  return response.json();
 }
 
 export async function getConversations(): Promise<Conversation[]> {
@@ -84,6 +109,14 @@ export async function updateConversationTitle(
   });
   if (!response.ok) throw new Error("Failed to update conversation title");
   return response.json();
+}
+
+export async function deleteConversation(conversationId: string): Promise<void> {
+  const response = await fetch(`/api/conversations/${conversationId}`, {
+    method: "DELETE",
+    headers: authHeaders()
+  });
+  if (!response.ok) throw new Error("Failed to delete conversation");
 }
 
 export async function uploadDocument(
@@ -155,4 +188,13 @@ function parseSseChunk(chunk: string): StreamEvent[] {
     return [];
   }
   return [{ event: eventName, data: JSON.parse(dataLines.join("\n")) } as StreamEvent];
+}
+
+async function readError(response: Response, fallback: string): Promise<string> {
+  try {
+    const payload = await response.json();
+    return typeof payload.detail === "string" ? payload.detail : fallback;
+  } catch {
+    return fallback;
+  }
 }

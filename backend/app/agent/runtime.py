@@ -14,9 +14,12 @@ from app.services.rag import RagService
 
 
 class AgentRuntime:
-    def __init__(self, session: AsyncSession, plugin_registry: PluginRegistry) -> None:
+    def __init__(
+        self, session: AsyncSession, plugin_registry: PluginRegistry, user_id: UUID | None = None
+    ) -> None:
         self.session = session
         self.plugin_registry = plugin_registry
+        self.user_id = user_id
         self.model_gateway = ModelGateway()
         self.rag = RagService(session)
         self.settings = get_settings()
@@ -62,11 +65,15 @@ class AgentRuntime:
 
     async def _ensure_conversation(self, request: ChatRequest) -> Conversation:
         if request.conversation_id is not None:
-            conversation = await self.session.get(Conversation, request.conversation_id)
+            statement = select(Conversation).where(Conversation.id == request.conversation_id)
+            if self.user_id is not None:
+                statement = statement.where(Conversation.user_id == self.user_id)
+            result = await self.session.execute(statement)
+            conversation = result.scalar_one_or_none()
             if conversation is not None:
                 return conversation
 
-        conversation = Conversation(title="New conversation")
+        conversation = Conversation(title="New conversation", user_id=self.user_id)
         self.session.add(conversation)
         await self.session.flush()
         return conversation

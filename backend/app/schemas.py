@@ -2,7 +2,32 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+USERNAME_PATTERN = r"^[A-Za-z0-9_][A-Za-z0-9_.-]{2,39}$"
+
+
+class AuthCredentials(BaseModel):
+    username: str = Field(min_length=3, max_length=40, pattern=USERNAME_PATTERN)
+    password: str = Field(min_length=4, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def normalize_username_input(cls, value: str) -> str:
+        return value.strip()
+
+
+class UserRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    username: str
+
+
+class AuthResponse(BaseModel):
+    token: str
+    user: UserRead
 
 
 class ConversationCreate(BaseModel):

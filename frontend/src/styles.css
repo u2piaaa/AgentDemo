@@ -79,6 +79,34 @@ input:focus-visible {
   padding: 0 12px;
 }
 
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.auth-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #263746;
+  font-weight: 700;
+}
+
+.auth-tab.active {
+  background: var(--surface);
+  box-shadow: 0 1px 4px rgba(17, 32, 46, 0.12);
+}
+
 .auth-error {
   margin: 0;
   color: #9d2f1d;
@@ -134,7 +162,9 @@ input:focus-visible {
 }
 
 .primary-action,
-.send-button {
+.secondary-action,
+.send-button,
+.danger-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -150,9 +180,30 @@ input:focus-visible {
     opacity 180ms ease;
 }
 
+.secondary-action {
+  border: 1px solid #365569;
+  background: transparent;
+  color: #dbe6ed;
+}
+
 .primary-action:hover,
 .send-button:hover:not(:disabled) {
   background: var(--primary-strong);
+}
+
+.secondary-action:hover {
+  background: #243848;
+}
+
+.danger-action {
+  border: 0;
+  background: #a43a2a;
+  color: #ffffff;
+  padding: 0 14px;
+}
+
+.danger-action:hover {
+  background: #842f23;
 }
 
 .send-button:disabled {
@@ -170,20 +221,54 @@ input:focus-visible {
 }
 
 .conversation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
   min-height: 44px;
   border: 1px solid transparent;
   border-radius: 8px;
-  padding: 10px 12px;
   background: transparent;
   color: #dbe6ed;
+}
+
+.conversation-select,
+.conversation-delete {
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.conversation-select {
+  min-width: 0;
+  padding: 10px 0 10px 12px;
   text-align: left;
 }
 
-.conversation span {
+.conversation-select span {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.conversation-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: #b8c6d1;
+}
+
+.conversation-delete:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+.conversation-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .conversation:hover,
@@ -261,6 +346,11 @@ input:focus-visible {
 
 .icon-button:hover {
   background: var(--surface-soft);
+}
+
+.text-button {
+  width: auto;
+  padding: 0 14px;
 }
 
 .runtime-state {
@@ -529,6 +619,49 @@ input:focus-visible {
   font-size: 13px;
   font-weight: 700;
   text-align: right;
+}
+
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(16, 27, 36, 0.46);
+  z-index: 20;
+}
+
+.confirm-dialog {
+  display: grid;
+  width: min(420px, 100%);
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.confirm-dialog h3,
+.confirm-dialog p {
+  margin: 0;
+}
+
+.confirm-dialog h3 {
+  color: #172633;
+  font-size: 18px;
+}
+
+.confirm-dialog p {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
 }
 
 @media (max-width: 1040px) {

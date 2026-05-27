@@ -22,7 +22,9 @@ class AccessTokenMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if not request.url.path.startswith("/api"):
             return await call_next(request)
-        if request.url.path in {"/api/health", "/api/auth/status", "/api/auth/check"}:
+        if request.url.path == "/api/health" or request.url.path.startswith("/api/auth"):
+            return await call_next(request)
+        if request.headers.get("authorization", "").startswith("Bearer "):
             return await call_next(request)
         token = request.headers.get("x-agent-access-token")
         if token != settings.agent_access_token:

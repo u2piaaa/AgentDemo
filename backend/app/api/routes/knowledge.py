@@ -6,7 +6,9 @@ from pypdf import PdfReader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.routes.auth import CurrentUser
 from app.db.database import get_session
+from app.models.conversation import Conversation
 from app.models.knowledge import KnowledgeDocument
 from app.schemas import KnowledgeDocumentCreate, KnowledgeDocumentRead
 from app.services.rag import RagService
@@ -16,13 +18,15 @@ router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
 @router.get("/documents", response_model=list[KnowledgeDocumentRead])
 async def list_documents(
+    current_user: CurrentUser,
     conversation_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> list[KnowledgeDocument]:
     statement = select(KnowledgeDocument).order_by(KnowledgeDocument.created_at.desc())
     if conversation_id is None:
-        statement = statement.where(KnowledgeDocument.conversation_id.is_(None))
+        return []
     else:
+        await require_owned_conversation(session, conversation_id, current_user.id)
         statement = statement.where(KnowledgeDocument.conversation_id == conversation_id)
     result = await session.execute(statement)
     return list(result.scalars().all())
@@ -31,18 +35,24 @@ async def list_documents(
 @router.post("/documents", response_model=KnowledgeDocumentRead)
 async def create_document(
     payload: KnowledgeDocumentCreate,
+    current_user: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ) -> KnowledgeDocumentRead:
+    if payload.conversation_id is not None:
+        await require_owned_conversation(session, payload.conversation_id, current_user.id)
     service = RagService(session)
     return await service.index_text(payload)
 
 
 @router.post("/documents/upload", response_model=KnowledgeDocumentRead)
 async def upload_document(
+    current_user: CurrentUser,
     file: UploadFile = File(...),
     conversation_id: UUID | None = Form(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> KnowledgeDocumentRead:
+    if conversation_id is not None:
+        await require_owned_conversation(session, conversation_id, current_user.id)
     raw = await file.read()
     content = extract_text(file.filename or "uploaded-document", raw, file.content_type)
     if not content.strip():
@@ -55,6 +65,21 @@ async def upload_document(
         content=content,
     )
     return await RagService(session).index_text(payload)
+
+
+async def require_owned_conversation(
+    session: AsyncSession,
+    conversation_id: UUID,
+    user_id: UUID,
+) -> None:
+    result = await session.execute(
+        select(Conversation.id).where(
+            Conversation.id == conversation_id,
+            Conversation.user_id == user_id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
 
 def detect_source_type(filename: str, content_type: str | None) -> str:

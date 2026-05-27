@@ -8,26 +8,33 @@ import {
   FileUp,
   Hammer,
   Loader2,
+  LogIn,
+  LogOut,
   MessageSquarePlus,
   Send,
   Settings2,
+  Trash2,
+  UserPlus,
   X
 } from "lucide-react";
 import {
-  checkAccessToken,
-  clearAccessToken,
+  clearAuthToken,
   createConversation,
+  deleteConversation,
+  getCurrentUser,
   getAuthStatus,
   getConversations,
   getDocuments,
   getMessages,
   getTools,
-  setAccessToken,
+  login,
+  register,
+  setAuthToken,
   streamChat,
   updateConversationTitle,
   uploadDocument
 } from "./api";
-import type { Citation, Conversation, KnowledgeDocument, Message, ToolManifest } from "./types";
+import type { Citation, Conversation, KnowledgeDocument, Message, ToolManifest, User } from "./types";
 
 type DraftMessage = Pick<Message, "role" | "content"> & { id: string; metadata?: Record<string, unknown> };
 
@@ -78,27 +85,34 @@ export function App() {
   const [status, setStatus] = useState("Idle");
   const [isStreaming, setIsStreaming] = useState(false);
   const [citations, setCitations] = useState<Citation[]>([]);
-  const [authRequired, setAuthRequired] = useState(false);
-  const [isUnlocked, setIsUnlocked] = useState(false);
-  const [accessCode, setAccessCode] = useState("");
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [authError, setAuthError] = useState("");
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [uploadStatus, setUploadStatus] = useState("No document uploaded in this chat.");
   const [isUploading, setIsUploading] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [conversationToDelete, setConversationToDelete] = useState<Conversation | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    getAuthStatus().then((status) => {
-      setAuthRequired(status.required);
-      setIsUnlocked(!status.required || Boolean(sessionStorage.getItem("agent_access_token")));
-    });
+    getAuthStatus()
+      .then(() => getCurrentUser())
+      .then(setCurrentUser)
+      .catch(() => {
+        clearAuthToken();
+        setCurrentUser(null);
+      })
+      .finally(() => setIsCheckingAuth(false));
   }, []);
 
   useEffect(() => {
-    if (authRequired && !isUnlocked) {
+    if (!currentUser) {
       return;
     }
     getConversations().then((items) => {
@@ -106,7 +120,7 @@ export function App() {
       setActiveConversationId(items[0]?.id ?? null);
     });
     getTools().then(setTools);
-  }, [authRequired, isUnlocked]);
+  }, [currentUser]);
 
   useEffect(() => {
     if (!activeConversationId) {
@@ -159,19 +173,50 @@ export function App() {
     setUploadStatus("No document uploaded in this chat.");
   }
 
-  async function handleUnlock(event: FormEvent) {
+  async function handleAuthSubmit(event: FormEvent) {
     event.preventDefault();
-    const token = accessCode.trim();
-    if (!token) return;
-    const ok = await checkAccessToken(token);
-    if (!ok) {
-      clearAccessToken();
-      setAuthError("Access code is incorrect.");
+    const username = authUsername.trim();
+    if (!username || !authPassword) return;
+    setAuthError("");
+
+    try {
+      const response =
+        authMode === "login"
+          ? await login(username, authPassword)
+          : await register(username, authPassword);
+      setAuthToken(response.token);
+      setCurrentUser(response.user);
+      setAuthPassword("");
+    } catch (error) {
+      clearAuthToken();
+      setAuthError(error instanceof Error ? error.message : "Authentication failed");
+    }
+  }
+
+  function handleLogout() {
+    clearAuthToken();
+    setCurrentUser(null);
+    setConversations([]);
+    setActiveConversationId(null);
+    setMessages([]);
+    setTools([]);
+    setDocuments([]);
+    setCitations([]);
+    setStatus("Idle");
+  }
+
+  async function handleDeleteConversation() {
+    if (!conversationToDelete) {
       return;
     }
-    setAccessToken(token);
-    setAuthError("");
-    setIsUnlocked(true);
+    const deletedId = conversationToDelete.id;
+    await deleteConversation(deletedId);
+    setConversationToDelete(null);
+    setConversations((current) => current.filter((conversation) => conversation.id !== deletedId));
+    if (activeConversationId === deletedId) {
+      const nextConversation = conversations.find((conversation) => conversation.id !== deletedId);
+      setActiveConversationId(nextConversation?.id ?? null);
+    }
   }
 
   async function handleSaveTitle(event: FormEvent) {
@@ -277,22 +322,73 @@ export function App() {
     }
   }
 
-  if (authRequired && !isUnlocked) {
+  if (isCheckingAuth) {
     return (
       <main className="auth-screen">
-        <form className="auth-panel" onSubmit={handleUnlock}>
+        <div className="auth-panel">
           <Bot size={32} aria-hidden="true" />
           <h1>Personal Agent</h1>
-          <label htmlFor="access-code">Access code</label>
+          <p className="muted">Checking session...</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <main className="auth-screen">
+        <form className="auth-panel" onSubmit={handleAuthSubmit}>
+          <Bot size={32} aria-hidden="true" />
+          <h1>Personal Agent</h1>
+          <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
+            <button
+              className={authMode === "login" ? "auth-tab active" : "auth-tab"}
+              type="button"
+              onClick={() => {
+                setAuthMode("login");
+                setAuthError("");
+              }}
+            >
+              <LogIn size={16} aria-hidden="true" />
+              Login
+            </button>
+            <button
+              className={authMode === "register" ? "auth-tab active" : "auth-tab"}
+              type="button"
+              onClick={() => {
+                setAuthMode("register");
+                setAuthError("");
+              }}
+            >
+              <UserPlus size={16} aria-hidden="true" />
+              Register
+            </button>
+          </div>
+          <label htmlFor="auth-username">Username</label>
           <input
-            id="access-code"
+            id="auth-username"
+            type="text"
+            value={authUsername}
+            onChange={(event) => setAuthUsername(event.target.value)}
+            autoComplete="username"
+            minLength={3}
+            maxLength={40}
+          />
+          <label htmlFor="auth-password">Password</label>
+          <input
+            id="auth-password"
             type="password"
-            value={accessCode}
-            onChange={(event) => setAccessCode(event.target.value)}
+            value={authPassword}
+            onChange={(event) => setAuthPassword(event.target.value)}
             autoComplete="current-password"
+            minLength={4}
+            maxLength={128}
           />
           {authError ? <p className="auth-error">{authError}</p> : null}
-          <button className="primary-action">Unlock</button>
+          <button className="primary-action">
+            {authMode === "login" ? <LogIn size={18} aria-hidden="true" /> : <UserPlus size={18} aria-hidden="true" />}
+            {authMode === "login" ? "Login" : "Create account"}
+          </button>
         </form>
       </main>
     );
@@ -305,22 +401,37 @@ export function App() {
           <Bot size={24} aria-hidden="true" />
           <div>
             <h1>Personal Agent</h1>
-            <p>Local runtime workspace</p>
+            <p>{currentUser.username}</p>
           </div>
         </div>
+        <button className="secondary-action" onClick={handleLogout}>
+          <LogOut size={18} aria-hidden="true" />
+          Logout
+        </button>
         <button className="primary-action" onClick={handleNewConversation}>
           <MessageSquarePlus size={18} aria-hidden="true" />
           New chat
         </button>
         <nav className="conversation-list">
           {conversations.map((conversation) => (
-            <button
+            <div
               className={conversation.id === activeConversationId ? "conversation active" : "conversation"}
               key={conversation.id}
-              onClick={() => setActiveConversationId(conversation.id)}
             >
-              <span>{conversation.title}</span>
-            </button>
+              <button className="conversation-select" onClick={() => setActiveConversationId(conversation.id)}>
+                <span>{conversation.title}</span>
+              </button>
+              <button
+                className="conversation-delete"
+                type="button"
+                aria-label={`Delete ${conversation.title}`}
+                title="Delete conversation"
+                onClick={() => setConversationToDelete(conversation)}
+                disabled={isStreaming}
+              >
+                <Trash2 size={16} aria-hidden="true" />
+              </button>
+            </div>
           ))}
         </nav>
       </aside>
@@ -505,6 +616,28 @@ export function App() {
           </aside>
         </div>
       </section>
+      {conversationToDelete ? (
+        <div className="confirm-backdrop" role="presentation">
+          <div
+            className="confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-conversation-title"
+          >
+            <h3 id="delete-conversation-title">Delete conversation?</h3>
+            <p>{conversationToDelete.title}</p>
+            <div className="confirm-actions">
+              <button className="icon-button text-button" onClick={() => setConversationToDelete(null)}>
+                Cancel
+              </button>
+              <button className="danger-action" onClick={handleDeleteConversation}>
+                <Trash2 size={16} aria-hidden="true" />
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
