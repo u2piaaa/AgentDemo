@@ -288,6 +288,10 @@ class AgentRuntime:
             return "New conversation"
         prefixes = (
             "请记住",
+            "请帮我",
+            "请帮忙",
+            "能否请",
+            "可以帮我",
             "请",
             "帮我",
             "帮忙",
@@ -298,7 +302,7 @@ class AgentRuntime:
             "could you",
         )
         lowered = clean.lower()
-        for prefix in prefixes:
+        for prefix in sorted(prefixes, key=len, reverse=True):
             if lowered.startswith(prefix):
                 clean = clean[len(prefix) :].strip(" ：:，,。.!！?")
                 break
