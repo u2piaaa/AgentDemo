@@ -23,6 +23,7 @@ class Conversation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     user: Mapped["User"] = relationship(back_populates="conversations")
     messages: Mapped[list["Message"]] = relationship(back_populates="conversation")
+    memory_summaries: Mapped[list["MemorySummary"]] = relationship(back_populates="conversation")
 
 
 class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -49,6 +50,12 @@ class MemorySummary(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     summary: Mapped[str] = mapped_column(Text)
     valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    conversation: Mapped[Conversation] = relationship(back_populates="memory_summaries")
+
+    @property
+    def disabled(self) -> bool:
+        return self.valid_to is not None
 
 
 Index("ix_messages_conversation_created", Message.conversation_id, Message.created_at)

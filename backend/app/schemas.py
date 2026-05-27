@@ -174,3 +174,35 @@ class KnowledgeDocumentRead(BaseModel):
     source_type: str
     status: str
     created_at: datetime
+
+
+class CitationMetadata(BaseModel):
+    document_title: str
+    chunk_index: int
+    source_type: str
+    score: float
+    retrieval_method: str
+
+
+class CitationRead(BaseModel):
+    document_id: UUID
+    title: str
+    chunk_index: int
+    content: str
+    source_type: str
+    score: float
+    retrieval_method: str
+    metadata: CitationMetadata
+
+
+class MemorySummaryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    conversation_id: UUID
+    summary: str
+    valid_from: datetime | None
+    valid_to: datetime | None
+    disabled: bool
+    created_at: datetime
+    updated_at: datetime
