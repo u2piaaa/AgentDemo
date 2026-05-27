@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 from time import perf_counter
 from typing import Any
 
@@ -35,10 +36,78 @@ class ToolExecutor:
         )
 
     def _validate_arguments(self, tool: RegisteredTool, arguments: dict[str, Any]) -> None:
-        required = tool.manifest.parameters.get("required", [])
+        schema = tool.manifest.parameters
+        if schema.get("type", "object") != "object":
+            raise HTTPException(status_code=500, detail="Tool parameter schema must be an object")
+
+        if not isinstance(arguments, Mapping):
+            raise HTTPException(status_code=422, detail="Tool arguments must be an object")
+
+        required = schema.get("required", [])
         missing = [name for name in required if name not in arguments]
         if missing:
             raise HTTPException(status_code=422, detail=f"Missing required arguments: {missing}")
+
+        properties = schema.get("properties", {})
+        if schema.get("additionalProperties") is False:
+            unknown = sorted(name for name in arguments if name not in properties)
+            if unknown:
+                raise HTTPException(status_code=422, detail=f"Unknown arguments: {unknown}")
+
+        errors: list[str] = []
+        for name, value in arguments.items():
+            property_schema = properties.get(name)
+            if not isinstance(property_schema, Mapping):
+                continue
+            expected_type = property_schema.get("type")
+            if expected_type is not None and not self._matches_schema_type(value, expected_type):
+                errors.append(f"{name} must be {self._type_label(expected_type)}")
+                continue
+            fmt = property_schema.get("format")
+            if fmt is not None and not self._matches_format(value, fmt):
+                errors.append(f"{name} must match format {fmt}")
+
+        if errors:
+            raise HTTPException(status_code=422, detail="; ".join(errors))
+
+    def _matches_schema_type(self, value: Any, expected_type: Any) -> bool:
+        if isinstance(expected_type, list):
+            return any(self._matches_schema_type(value, item) for item in expected_type)
+        if expected_type == "string":
+            return isinstance(value, str)
+        if expected_type == "integer":
+            return isinstance(value, int) and not isinstance(value, bool)
+        if expected_type == "number":
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+        if expected_type == "boolean":
+            return isinstance(value, bool)
+        if expected_type == "object":
+            return isinstance(value, Mapping)
+        if expected_type == "array":
+            return isinstance(value, list)
+        if expected_type == "null":
+            return value is None
+        return True
+
+    def _type_label(self, expected_type: Any) -> str:
+        if isinstance(expected_type, list):
+            return " or ".join(str(item) for item in expected_type)
+        return str(expected_type)
+
+    def _matches_format(self, value: Any, fmt: str) -> bool:
+        if not isinstance(value, str):
+            return True
+        if fmt == "path":
+            return bool(value.strip()) and "\x00" not in value
+        if fmt == "uuid":
+            from uuid import UUID
+
+            try:
+                UUID(value)
+            except ValueError:
+                return False
+            return True
+        return True
 
     def _limit_output(self, output: Any) -> Any:
         max_chars = self.settings.max_tool_output_chars
