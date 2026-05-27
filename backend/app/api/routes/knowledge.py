@@ -1,0 +1,79 @@
+from io import BytesIO
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pypdf import PdfReader
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.database import get_session
+from app.models.knowledge import KnowledgeDocument
+from app.schemas import KnowledgeDocumentCreate, KnowledgeDocumentRead
+from app.services.rag import RagService
+
+router = APIRouter(prefix="/knowledge", tags=["knowledge"])
+
+
+@router.get("/documents", response_model=list[KnowledgeDocumentRead])
+async def list_documents(
+    conversation_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> list[KnowledgeDocument]:
+    statement = select(KnowledgeDocument).order_by(KnowledgeDocument.created_at.desc())
+    if conversation_id is None:
+        statement = statement.where(KnowledgeDocument.conversation_id.is_(None))
+    else:
+        statement = statement.where(KnowledgeDocument.conversation_id == conversation_id)
+    result = await session.execute(statement)
+    return list(result.scalars().all())
+
+
+@router.post("/documents", response_model=KnowledgeDocumentRead)
+async def create_document(
+    payload: KnowledgeDocumentCreate,
+    session: AsyncSession = Depends(get_session),
+) -> KnowledgeDocumentRead:
+    service = RagService(session)
+    return await service.index_text(payload)
+
+
+@router.post("/documents/upload", response_model=KnowledgeDocumentRead)
+async def upload_document(
+    file: UploadFile = File(...),
+    conversation_id: UUID | None = Form(default=None),
+    session: AsyncSession = Depends(get_session),
+) -> KnowledgeDocumentRead:
+    raw = await file.read()
+    content = extract_text(file.filename or "uploaded-document", raw, file.content_type)
+    if not content.strip():
+        raise HTTPException(status_code=422, detail="No text could be extracted from the document")
+    payload = KnowledgeDocumentCreate(
+        title=file.filename or "uploaded-document",
+        source_type=detect_source_type(file.filename or "", file.content_type),
+        source_uri=f"upload:{file.filename}",
+        conversation_id=conversation_id,
+        content=content,
+    )
+    return await RagService(session).index_text(payload)
+
+
+def detect_source_type(filename: str, content_type: str | None) -> str:
+    lower = filename.lower()
+    if lower.endswith(".pdf") or content_type == "application/pdf":
+        return "pdf"
+    if lower.endswith(".md"):
+        return "markdown"
+    return "text"
+
+
+def extract_text(filename: str, raw: bytes, content_type: str | None) -> str:
+    source_type = detect_source_type(filename, content_type)
+    if source_type == "pdf":
+        reader = PdfReader(BytesIO(raw))
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    if source_type in {"markdown", "text"} or filename.lower().endswith((".txt", ".md")):
+        return raw.decode("utf-8-sig", errors="replace")
+    raise HTTPException(
+        status_code=415,
+        detail="Unsupported document type. Upload TXT, Markdown, or text-based PDF files.",
+    )
