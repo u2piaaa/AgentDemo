@@ -101,8 +101,11 @@ class ToolManifestRead(BaseModel):
     name: str
     description: str
     permission: str
+    requires_confirmation: bool = False
     enabled: bool
     parameters: dict[str, Any]
+    timeout_seconds: int
+    output_strategy: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolRunRequest(BaseModel):

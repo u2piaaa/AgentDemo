@@ -2,17 +2,25 @@
   "name": "read_file",
   "description": "Read a UTF-8 text file from an allowed local path.",
   "permission": "filesystem_read",
+  "requires_confirmation": false,
   "timeout_seconds": 10,
   "enabled": true,
   "entrypoint": "tool.py:run",
   "parameters": {
     "type": "object",
     "required": ["path"],
+    "additionalProperties": false,
     "properties": {
       "path": {
         "type": "string",
+        "format": "path",
         "description": "Absolute or workspace-relative path to a text file."
       }
     }
+  },
+  "output_strategy": {
+    "mode": "truncate",
+    "max_chars": 8000,
+    "summary_max_chars": 500
   }
 }

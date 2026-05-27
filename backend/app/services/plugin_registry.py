@@ -12,9 +12,11 @@ from app.schemas import ToolManifestRead
 class PluginManifest(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z0-9_.-]+$")
     description: str
-    parameters: dict[str, Any]
     permission: str = "safe"
-    timeout_seconds: int = 30
+    requires_confirmation: bool = False
+    parameters: dict[str, Any] = Field(default_factory=lambda: {"type": "object"})
+    timeout_seconds: int = Field(default=30, gt=0, le=300)
+    output_strategy: dict[str, Any] = Field(default_factory=dict)
     entrypoint: str
     enabled: bool = True
 
@@ -30,8 +32,11 @@ class RegisteredTool:
             name=self.manifest.name,
             description=self.manifest.description,
             permission=self.manifest.permission,
+            requires_confirmation=self.manifest.requires_confirmation,
             enabled=self.manifest.enabled,
             parameters=self.manifest.parameters,
+            timeout_seconds=self.manifest.timeout_seconds,
+            output_strategy=self.manifest.output_strategy,
         )
 
 
