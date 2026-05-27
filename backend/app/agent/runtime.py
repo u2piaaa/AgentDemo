@@ -78,7 +78,9 @@ class AgentRuntime:
             {
                 "conversation_id": str(conversation.id),
                 "citations": state.citations,
+                "tool_calls": state.tool_calls,
                 "trace_id": state.trace_id,
+                "model_route": asdict(route),
             },
         )
 
@@ -115,6 +117,7 @@ class AgentRuntime:
             state.final_answer,
             metadata={
                 "citations": state.citations,
+                "tool_calls": state.tool_calls,
                 "trace_id": state.trace_id,
                 "model_route": asdict(route),
             },
@@ -321,4 +324,4 @@ class AgentRuntime:
         await self.session.commit()
 
     def _event(self, event_type: str, data: dict) -> dict[str, str]:
-        return {"event": event_type, "data": json.dumps(data)}
+        return {"event": event_type, "data": json.dumps(data, ensure_ascii=False)}
