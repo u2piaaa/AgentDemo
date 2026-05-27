@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models.conversation import Conversation, Message
-from app.schemas import AgentExecutionState, ChatRequest
+from app.schemas import AgentExecutionState, AgentToolPlan, ChatRequest
 from app.services.model_gateway import ModelGateway
 from app.services.plugin_registry import PluginRegistry
 from app.services.rag import Citation, RagService
@@ -59,6 +59,8 @@ class AgentRuntime:
 
         yield self._event("status", {"label": "planning"})
         route = self.model_gateway.route(request.task_type, request.message)
+        state.plan = self._plan_next_step(state)
+        yield self._event("plan", state.plan.model_dump())
 
         yield self._event("status", {"label": "generating", "model": route.model_name})
         async for token in self._generate_answer(state, route.model_name):
@@ -114,6 +116,9 @@ class AgentRuntime:
 
     def _dump_citations(self, citations: list[Citation]) -> list[dict]:
         return [item.model_dump() for item in citations]
+
+    def _plan_next_step(self, state: AgentExecutionState) -> AgentToolPlan:
+        return AgentToolPlan(no_tool=True, reason="No tool is needed for this message.")
 
     async def _ensure_conversation(self, request: ChatRequest) -> Conversation:
         if request.conversation_id is not None:
