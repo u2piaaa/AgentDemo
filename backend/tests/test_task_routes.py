@@ -99,6 +99,11 @@ def test_task_update_accepts_progress() -> None:
     assert payload.progress == 50
 
 
+def test_task_update_rejects_unknown_status() -> None:
+    with pytest.raises(ValueError, match="status must be one of"):
+        TaskUpdate(status="waiting")
+
+
 @pytest.mark.parametrize(
     ("method", "path", "json_body"),
     [
@@ -211,3 +216,19 @@ def test_update_task_allows_owner() -> None:
     assert response.json()["progress"] == 20
     assert task.status == "running"
     assert task.progress == 20
+
+
+def test_update_task_rejects_invalid_status_transition() -> None:
+    user = SimpleNamespace(id=uuid4())
+    task = make_task(user.id)
+    task.status = "succeeded"
+    session = FakeSession(
+        results=[FakeResult(scalar=task)],
+        expected_filters=[("tasks.user_id", user.id)],
+    )
+    client = make_client(session, user)
+
+    response = client.patch(f"/api/tasks/{task.id}", json={"status": "running"})
+
+    assert response.status_code == 409
+    assert task.status == "succeeded"

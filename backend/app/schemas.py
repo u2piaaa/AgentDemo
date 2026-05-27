@@ -4,6 +4,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.models.task import TASK_STATUSES
+
 
 USERNAME_PATTERN = r"^[A-Za-z0-9_][A-Za-z0-9_.-]{2,39}$"
 
@@ -95,6 +97,14 @@ class TaskUpdate(BaseModel):
     error: str | None = None
     result: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str | None) -> str | None:
+        if value is not None and value not in TASK_STATUSES:
+            allowed = ", ".join(sorted(TASK_STATUSES))
+            raise ValueError(f"status must be one of: {allowed}")
+        return value
 
 
 class ToolManifestRead(BaseModel):

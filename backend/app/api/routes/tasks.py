@@ -7,7 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.routes.auth import CurrentUser
 from app.db.database import get_session
 from app.models.conversation import Conversation
-from app.models.task import Task
+from app.models.task import (
+    TASK_STATUS_QUEUED,
+    Task,
+    is_valid_task_status_transition,
+)
 from app.schemas import TaskCreate, TaskRead, TaskUpdate
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -41,7 +45,7 @@ async def create_task(
         name=payload.name,
         user_id=current_user.id,
         conversation_id=payload.conversation_id,
-        status="queued",
+        status=TASK_STATUS_QUEUED,
         progress=0,
         metadata_=payload.metadata,
     )
@@ -74,6 +78,7 @@ async def update_task(
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     if payload.status is not None:
+        validate_task_transition(task, payload.status)
         task.status = payload.status
     if payload.progress is not None:
         task.progress = payload.progress
@@ -98,6 +103,15 @@ async def get_owned_conversation(
         )
     )
     return result.scalar_one_or_none()
+
+
+def validate_task_transition(task: Task, next_status: str) -> None:
+    if is_valid_task_status_transition(task.status, next_status):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=f"Invalid task status transition from {task.status} to {next_status}",
+    )
 
 
 async def get_owned_task(session: AsyncSession, task_id: UUID, user_id: UUID) -> Task | None:
