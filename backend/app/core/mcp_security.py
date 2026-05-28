@@ -135,7 +135,7 @@ def scrub_mcp_config(value: Any) -> Any:
 def contains_plaintext_mcp_secret(value: Any) -> bool:
     if isinstance(value, dict):
         for key, item in value.items():
-            if _looks_secret_key(key) and item not in (None, "", "***REDACTED***"):
+            if _looks_secret_key(key) and not _is_safe_secret_reference(item):
                 return True
             if contains_plaintext_mcp_secret(item):
                 return True
@@ -152,3 +152,9 @@ def _require_local_bind_host(host: str) -> None:
 def _looks_secret_key(key: str) -> bool:
     lowered = key.lower()
     return any(marker in lowered for marker in SECRET_FIELD_MARKERS)
+
+
+def _is_safe_secret_reference(value: Any) -> bool:
+    if value in (None, "", "***REDACTED***"):
+        return True
+    return isinstance(value, str) and value.startswith("${") and value.endswith("}")
