@@ -1,9 +1,12 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertCircle,
   BookOpen,
   Bot,
   Check,
+  CheckCircle2,
   CircleDot,
+  ClipboardList,
   Edit2,
   FileUp,
   Hammer,
@@ -12,13 +15,16 @@ import {
   LogOut,
   Menu,
   MessageSquarePlus,
+  PauseCircle,
   Send,
   Settings2,
   Trash2,
   UserPlus,
-  X
+  X,
+  XCircle
 } from "lucide-react";
 import {
+  cancelTask,
   clearAuthToken,
   createConversation,
   deleteConversation,
@@ -27,6 +33,7 @@ import {
   getConversations,
   getDocuments,
   getMessages,
+  getTasks,
   getTools,
   login,
   register,
@@ -35,9 +42,40 @@ import {
   updateConversationTitle,
   uploadDocument
 } from "./api";
-import type { Citation, Conversation, KnowledgeDocument, Message, ToolManifest, User } from "./types";
+import type {
+  AgentPlanData,
+  Citation,
+  Conversation,
+  KnowledgeDocument,
+  Message,
+  Task,
+  ToolManifest,
+  ToolResultData,
+  User
+} from "./types";
 
 type DraftMessage = Pick<Message, "role" | "content"> & { id: string; metadata?: Record<string, unknown> };
+type ToolStatus = "running" | "success" | "failed" | "timeout" | "blocked" | "cancelled";
+type ConfirmationDecision = "pending" | "cancelled";
+
+type ToolTrace = {
+  id: string;
+  tool_name: string;
+  status: ToolStatus;
+  arguments: Record<string, unknown>;
+  reason?: string;
+  output_summary?: string | null;
+  error?: string | null;
+  duration_ms?: number;
+  trace_id?: string;
+  requires_confirmation?: boolean;
+};
+
+type ExecutionTrace = {
+  plans: AgentPlanData[];
+  toolCalls: ToolTrace[];
+  error?: string;
+};
 
 function makeClientId(prefix: string) {
   try {
@@ -77,6 +115,127 @@ function isCitation(value: unknown): value is Citation {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function summarizeValue(value: unknown, fallback = "No data"): string {
+  if (value === null || value === undefined) {
+    return fallback;
+  }
+  if (typeof value === "string") {
+    return value || fallback;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function compactSummary(value: unknown, maxLength = 180): string {
+  const text = summarizeValue(value);
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function formatDuration(durationMs: number | undefined): string {
+  if (typeof durationMs !== "number") {
+    return "n/a";
+  }
+  if (durationMs < 1000) {
+    return `${durationMs} ms`;
+  }
+  return `${(durationMs / 1000).toFixed(1)} s`;
+}
+
+function normalizeToolStatus(status: unknown): ToolStatus {
+  if (status === "success" || status === "timeout" || status === "cancelled") {
+    return status;
+  }
+  if (status === "running" || status === "blocked") {
+    return status;
+  }
+  return "failed";
+}
+
+function normalizePersistedToolCalls(raw: unknown): ToolTrace[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.flatMap((item, index) => {
+    if (!isRecord(item) || typeof item.tool_name !== "string") {
+      return [];
+    }
+    const result = isRecord(item.result) ? item.result : undefined;
+    const status = normalizeToolStatus(result?.status);
+    return [
+      {
+        id: `${item.tool_name}-${index}`,
+        tool_name: item.tool_name,
+        status: isConfirmationBlock(item, result) ? "blocked" : status,
+        arguments: isRecord(item.arguments) ? item.arguments : {},
+        reason: typeof item.reason === "string" ? item.reason : undefined,
+        output_summary: typeof result?.output_summary === "string" ? result.output_summary : null,
+        error: typeof result?.error === "string" ? result.error : null,
+        duration_ms: typeof result?.duration_ms === "number" ? result.duration_ms : undefined,
+        trace_id: typeof result?.trace_id === "string" ? result.trace_id : undefined,
+        requires_confirmation: Boolean(item.requires_confirmation)
+      }
+    ];
+  });
+}
+
+function isConfirmationBlock(item: Record<string, unknown>, result: Record<string, unknown> | undefined) {
+  return Boolean(item.requires_confirmation) && result?.error === "Tool requires confirmation before execution";
+}
+
+function traceFromMessage(message: DraftMessage): ExecutionTrace | null {
+  const toolCalls = normalizePersistedToolCalls(message.metadata?.tool_calls);
+  return toolCalls.length ? { plans: [], toolCalls } : null;
+}
+
+function mergeToolResult(toolCalls: ToolTrace[], result: ToolResultData): ToolTrace[] {
+  const targetIndex = [...toolCalls]
+    .reverse()
+    .findIndex((tool) => tool.tool_name === result.tool_name && ["running", "blocked"].includes(tool.status));
+  const index = targetIndex === -1 ? -1 : toolCalls.length - 1 - targetIndex;
+  const nextCall: ToolTrace = {
+    id: result.trace_id ?? `${result.tool_name}-${Date.now().toString(36)}`,
+    tool_name: result.tool_name,
+    status: normalizeToolStatus(result.status),
+    arguments: {},
+    output_summary: result.output_summary,
+    error: result.error,
+    duration_ms: result.duration_ms,
+    trace_id: result.trace_id
+  };
+
+  if (index === -1) {
+    return [...toolCalls, nextCall];
+  }
+  const existing = toolCalls[index];
+  const status =
+    existing.requires_confirmation && result.error === "Tool requires confirmation before execution"
+      ? "blocked"
+      : normalizeToolStatus(result.status);
+  return toolCalls.map((tool, currentIndex) =>
+    currentIndex === index
+      ? {
+          ...tool,
+          status,
+          output_summary: result.output_summary,
+          error: result.error,
+          duration_ms: result.duration_ms,
+          trace_id: result.trace_id ?? tool.trace_id
+        }
+      : tool
+  );
+}
+
+function isTaskTerminal(status: string): boolean {
+  return ["succeeded", "failed", "cancelled", "stale"].includes(status);
+}
+
 export function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -93,6 +252,10 @@ export function App() {
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [authError, setAuthError] = useState("");
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskError, setTaskError] = useState("");
+  const [isLoadingTasks, setIsLoadingTasks] = useState(false);
+  const [cancellingTaskIds, setCancellingTaskIds] = useState<Set<string>>(() => new Set());
   const [uploadStatus, setUploadStatus] = useState("No document uploaded in this chat.");
   const [isUploading, setIsUploading] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -100,6 +263,8 @@ export function App() {
   const [conversationToDelete, setConversationToDelete] = useState<Conversation | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  const [executionTraces, setExecutionTraces] = useState<Record<string, ExecutionTrace>>({});
+  const [confirmationDecisions, setConfirmationDecisions] = useState<Record<string, ConfirmationDecision>>({});
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -130,6 +295,9 @@ export function App() {
       setMessages([]);
       setDocuments([]);
       setCitations([]);
+      setTasks([]);
+      setExecutionTraces({});
+      setConfirmationDecisions({});
       setUploadStatus("No document uploaded in this chat.");
       return;
     }
@@ -140,6 +308,8 @@ export function App() {
       ([loadedMessages, loadedDocuments]) => {
         setMessages(loadedMessages);
         setDocuments(loadedDocuments);
+        setExecutionTraces({});
+        setConfirmationDecisions({});
         setUploadStatus(
           loadedDocuments.length
             ? `${loadedDocuments.length} document${loadedDocuments.length === 1 ? "" : "s"} in this chat.`
@@ -156,10 +326,58 @@ export function App() {
     list.scrollTop = list.scrollHeight;
   }, [messages]);
 
+  useEffect(() => {
+    if (!currentUser || !activeConversationId) {
+      setTasks([]);
+      setTaskError("");
+      setIsLoadingTasks(false);
+      return;
+    }
+
+    let isActive = true;
+    async function loadConversationTasks(showLoading: boolean) {
+      if (showLoading) {
+        setIsLoadingTasks(true);
+      }
+      try {
+        const loadedTasks = await getTasks(activeConversationId);
+        if (!isActive) return;
+        setTasks(loadedTasks);
+        setTaskError("");
+      } catch (error) {
+        if (!isActive) return;
+        setTaskError(error instanceof Error ? error.message : "Failed to load tasks");
+      } finally {
+        if (isActive) {
+          setIsLoadingTasks(false);
+        }
+      }
+    }
+
+    void loadConversationTasks(true);
+    const interval = window.setInterval(() => void loadConversationTasks(false), 5000);
+    return () => {
+      isActive = false;
+      window.clearInterval(interval);
+    };
+  }, [activeConversationId, currentUser]);
+
   const activeConversation = useMemo(
     () => conversations.find((item) => item.id === activeConversationId),
     [activeConversationId, conversations]
   );
+
+  const toolHistory = useMemo(() => {
+    const fromMessages = messages.flatMap((message) => traceFromMessage(message)?.toolCalls ?? []);
+    const fromLive = Object.values(executionTraces).flatMap((trace) => trace.toolCalls);
+    const seen = new Set<string>();
+    return [...fromMessages, ...fromLive].filter((tool) => {
+      const key = `${tool.trace_id ?? tool.id}-${tool.tool_name}-${tool.duration_ms ?? ""}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [executionTraces, messages]);
 
   useEffect(() => {
     setIsEditingTitle(false);
@@ -173,6 +391,9 @@ export function App() {
     setMessages([]);
     setCitations([]);
     setDocuments([]);
+    setTasks([]);
+    setExecutionTraces({});
+    setConfirmationDecisions({});
     setUploadStatus("No document uploaded in this chat.");
     setIsSidebarOpen(false);
   }
@@ -210,7 +431,11 @@ export function App() {
     setMessages([]);
     setTools([]);
     setDocuments([]);
+    setTasks([]);
+    setTaskError("");
     setCitations([]);
+    setExecutionTraces({});
+    setConfirmationDecisions({});
     setStatus("Idle");
     setIsSidebarOpen(false);
     setIsInspectorOpen(false);
@@ -247,6 +472,40 @@ export function App() {
     setIsEditingTitle(false);
   }
 
+  async function handleCancelTask(taskId: string) {
+    if (cancellingTaskIds.has(taskId)) return;
+    setCancellingTaskIds((current) => new Set(current).add(taskId));
+    setTaskError("");
+    try {
+      const updated = await cancelTask(taskId);
+      setTasks((current) => current.map((task) => (task.id === updated.id ? updated : task)));
+    } catch (error) {
+      setTaskError(error instanceof Error ? error.message : "Failed to cancel task");
+    } finally {
+      setCancellingTaskIds((current) => {
+        const next = new Set(current);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  }
+
+  function handleCancelTool(toolId: string) {
+    setConfirmationDecisions((current) => ({ ...current, [toolId]: "cancelled" }));
+    setExecutionTraces((current) => {
+      const next: Record<string, ExecutionTrace> = {};
+      for (const [messageId, trace] of Object.entries(current)) {
+        next[messageId] = {
+          ...trace,
+          toolCalls: trace.toolCalls.map((tool) =>
+            tool.id === toolId ? { ...tool, status: "cancelled", error: "Cancelled in the frontend." } : tool
+          )
+        };
+      }
+      return next;
+    });
+  }
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const text = input.trim();
@@ -257,6 +516,10 @@ export function App() {
     setIsStreaming(true);
     setStatus("Starting");
     setCitations([]);
+    setExecutionTraces((current) => ({
+      ...current,
+      [assistantMessageId]: { plans: [], toolCalls: [] }
+    }));
     setMessages((current) => [
       ...current,
       { id: makeClientId("user"), role: "user", content: text },
@@ -267,6 +530,64 @@ export function App() {
       await streamChat(text, activeConversationId, (event) => {
         if (event.event === "status") {
           setStatus(event.data.model ? `${event.data.label}: ${event.data.model}` : event.data.label);
+        }
+        if (event.event === "plan") {
+          setExecutionTraces((current) => {
+            const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
+            return {
+              ...current,
+              [assistantMessageId]: {
+                ...trace,
+                plans: event.data.no_tool ? trace.plans : [...trace.plans, event.data]
+              }
+            };
+          });
+        }
+        if (event.event === "tool_call") {
+          setExecutionTraces((current) => {
+            const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
+            const plan = [...trace.plans]
+              .reverse()
+              .find((item) => item.tool_name === event.data.tool_name);
+            const toolId = `${event.data.trace_id ?? event.data.tool_name}-${trace.toolCalls.length}`;
+            return {
+              ...current,
+              [assistantMessageId]: {
+                ...trace,
+                toolCalls: [
+                  ...trace.toolCalls,
+                  {
+                    id: toolId,
+                    tool_name: event.data.tool_name,
+                    status: plan?.requires_confirmation ? "blocked" : "running",
+                    arguments: event.data.arguments,
+                    reason: event.data.reason ?? plan?.reason,
+                    trace_id: event.data.trace_id,
+                    requires_confirmation: event.data.requires_confirmation ?? plan?.requires_confirmation
+                  }
+                ]
+              }
+            };
+          });
+        }
+        if (event.event === "tool_result") {
+          setExecutionTraces((current) => {
+            const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
+            return {
+              ...current,
+              [assistantMessageId]: {
+                ...trace,
+                toolCalls: mergeToolResult(trace.toolCalls, event.data)
+              }
+            };
+          });
+        }
+        if (event.event === "error") {
+          setStatus(event.data.message);
+          setExecutionTraces((current) => {
+            const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
+            return { ...current, [assistantMessageId]: { ...trace, error: event.data.message } };
+          });
         }
         if (event.event === "token") {
           setMessages((current) =>
@@ -288,16 +609,22 @@ export function App() {
             const loadedDocuments = await getDocuments(conversationId);
             setMessages(loadedMessages);
             setDocuments(loadedDocuments);
+            void getTasks(conversationId).then(setTasks).catch(() => undefined);
           });
         }
       });
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Request failed");
+      const message = error instanceof Error ? error.message : "Request failed";
+      setStatus(message);
+      setExecutionTraces((current) => {
+        const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
+        return { ...current, [assistantMessageId]: { ...trace, error: message } };
+      });
       setMessages((current) =>
-        current.map((message) =>
-          message.id === assistantMessageId && !message.content
-            ? { ...message, content: "Request failed. Please try again." }
-            : message
+        current.map((item) =>
+          item.id === assistantMessageId && !item.content
+            ? { ...item, content: `Request failed: ${message}` }
+            : item
         )
       );
     } finally {
@@ -318,6 +645,9 @@ export function App() {
         setActiveConversationId(conversation.id);
         setMessages([]);
         setCitations([]);
+        setTasks([]);
+        setExecutionTraces({});
+        setConfirmationDecisions({});
       }
       const document = await uploadDocument(file, conversationId);
       setDocuments((current) => [document, ...current]);
@@ -331,6 +661,119 @@ export function App() {
         fileInputRef.current.value = "";
       }
     }
+  }
+
+  function renderExecutionTrace(message: DraftMessage) {
+    const trace = executionTraces[message.id] ?? traceFromMessage(message);
+    const hasSteps = Boolean(trace?.toolCalls.length || trace?.plans.length || trace?.error);
+    if (!hasSteps) return null;
+
+    return (
+      <div className="execution-trace" aria-label="Agent execution steps">
+        {trace?.plans.map((plan, index) => (
+          <div className="execution-step plan-step" key={`${plan.tool_name ?? "plan"}-${index}`}>
+            <ClipboardList size={15} aria-hidden="true" />
+            <div>
+              <strong>Plan</strong>
+              <p>{plan.reason || `Use ${plan.tool_name}`}</p>
+              {plan.tool_name ? <code>{plan.tool_name}</code> : null}
+            </div>
+          </div>
+        ))}
+        {trace?.toolCalls.map((tool) => renderToolStep(tool))}
+        {trace?.error ? (
+          <div className="execution-step failed">
+            <AlertCircle size={15} aria-hidden="true" />
+            <div>
+              <strong>Error</strong>
+              <p>{trace.error}</p>
+            </div>
+          </div>
+        ) : null}
+        {message.content ? (
+          <div className="execution-step final-step">
+            <CheckCircle2 size={15} aria-hidden="true" />
+            <div>
+              <strong>Final answer</strong>
+              <p>Streaming response delivered below.</p>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderToolStep(tool: ToolTrace) {
+    const decision = confirmationDecisions[tool.id];
+    const needsConfirmation = tool.requires_confirmation && tool.status === "blocked" && decision !== "cancelled";
+    return (
+      <div className={`execution-step tool-step ${tool.status}`} key={tool.id}>
+        {tool.status === "running" ? (
+          <Loader2 className="spin" size={15} aria-hidden="true" />
+        ) : tool.status === "success" ? (
+          <CheckCircle2 size={15} aria-hidden="true" />
+        ) : tool.status === "cancelled" ? (
+          <PauseCircle size={15} aria-hidden="true" />
+        ) : (
+          <XCircle size={15} aria-hidden="true" />
+        )}
+        <div>
+          <div className="step-heading">
+            <strong>{tool.tool_name}</strong>
+            <span>{tool.status === "running" ? "running" : `${tool.status} · ${formatDuration(tool.duration_ms)}`}</span>
+          </div>
+          {tool.reason ? <p>{tool.reason}</p> : null}
+          <pre>{compactSummary(tool.arguments)}</pre>
+          {tool.output_summary ? <p>{tool.output_summary}</p> : null}
+          {tool.error ? <p className="inline-error">{tool.error}</p> : null}
+          {needsConfirmation ? (
+            <div className="confirmation-box">
+              <p>This tool requires confirmation, but this stream cannot be resumed yet.</p>
+              <div className="confirmation-actions">
+                <button className="secondary-action compact" type="button" disabled title="Backend continue endpoint is not available yet">
+                  <Check size={15} aria-hidden="true" />
+                  Confirm
+                </button>
+                <button className="danger-action compact" type="button" onClick={() => handleCancelTool(tool.id)}>
+                  <X size={15} aria-hidden="true" />
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  function renderTask(task: Task) {
+    const isCancelling = cancellingTaskIds.has(task.id);
+    const canCancel = !isTaskTerminal(task.status);
+    return (
+      <div className="task-card" key={task.id}>
+        <div className="task-card-header">
+          <strong>{task.name}</strong>
+          <span className={`status-pill ${task.status}`}>{task.status}</span>
+        </div>
+        <div className="task-progress" aria-label={`${task.name} progress ${task.progress}%`}>
+          <span style={{ width: `${Math.max(0, Math.min(task.progress, 100))}%` }} />
+        </div>
+        <div className="task-meta">
+          <span>{task.progress}%</span>
+          {task.trace_id ? <span>{task.trace_id.slice(0, 10)}</span> : null}
+        </div>
+        {task.error ? <p className="inline-error">{task.error}</p> : null}
+        <button
+          className="danger-action compact"
+          type="button"
+          disabled={!canCancel || isCancelling}
+          onClick={() => handleCancelTask(task.id)}
+        >
+          <X size={15} aria-hidden="true" />
+          {isCancelling ? "Cancelling" : "Cancel"}
+        </button>
+      </div>
+    );
   }
 
   if (isCheckingAuth) {
@@ -463,7 +906,10 @@ export function App() {
             type="button"
             aria-label="Open conversations"
             title="Open conversations"
-            onClick={() => setIsSidebarOpen(true)}
+            onClick={() => {
+              setIsInspectorOpen(false);
+              setIsSidebarOpen(true);
+            }}
           >
             <Menu size={20} aria-hidden="true" />
           </button>
@@ -517,7 +963,10 @@ export function App() {
               type="button"
               aria-label="Open runtime details"
               title="Open runtime details"
-              onClick={() => setIsInspectorOpen(true)}
+              onClick={() => {
+                setIsSidebarOpen(false);
+                setIsInspectorOpen(true);
+              }}
             >
               <Settings2 size={18} aria-hidden="true" />
             </button>
@@ -541,7 +990,8 @@ export function App() {
                 messages.map((message) => (
                   <article className={`message ${message.role}`} key={message.id}>
                     <div className="message-role">{message.role}</div>
-                    <p>{message.content}</p>
+                    {message.role === "assistant" ? renderExecutionTrace(message) : null}
+                    {message.content ? <p>{message.content}</p> : null}
                   </article>
                 ))
               )}
@@ -591,6 +1041,21 @@ export function App() {
             </div>
             <section>
               <div className="section-title">
+                <ClipboardList size={18} aria-hidden="true" />
+                <h3>Tasks</h3>
+              </div>
+              <div className="stack-list">
+                {taskError ? <p className="inline-error">{taskError}</p> : null}
+                {isLoadingTasks ? <p className="muted">Loading current session tasks...</p> : null}
+                {!isLoadingTasks && tasks.length === 0 ? (
+                  <p className="muted">No tasks for this conversation.</p>
+                ) : (
+                  tasks.map(renderTask)
+                )}
+              </div>
+            </section>
+            <section>
+              <div className="section-title">
                 <FileUp size={18} aria-hidden="true" />
                 <h3>Documents</h3>
               </div>
@@ -618,10 +1083,35 @@ export function App() {
                 {tools.map((tool) => (
                   <div className="mini-card" key={tool.name}>
                     <strong>{tool.name}</strong>
-                    <span>{tool.permission}</span>
+                    <span>{tool.requires_confirmation ? `${tool.permission} · confirm` : tool.permission}</span>
                     <p>{tool.description}</p>
                   </div>
                 ))}
+              </div>
+            </section>
+
+            <section>
+              <div className="section-title">
+                <Settings2 size={18} aria-hidden="true" />
+                <h3>Tool history</h3>
+              </div>
+              <div className="stack-list">
+                {toolHistory.length === 0 ? (
+                  <p className="muted">No tool calls in this conversation yet.</p>
+                ) : (
+                  toolHistory.map((tool, index) => (
+                    <div className="mini-card tool-history-card" key={`${tool.id}-${index}`}>
+                      <div className="history-card-title">
+                        <strong>{tool.tool_name}</strong>
+                        <span className={`status-pill ${tool.status}`}>{tool.status}</span>
+                      </div>
+                      <span>{formatDuration(tool.duration_ms)}</span>
+                      <pre>{compactSummary(tool.arguments)}</pre>
+                      {tool.output_summary ? <p>{tool.output_summary}</p> : null}
+                      {tool.error ? <p className="inline-error">{tool.error}</p> : null}
+                    </div>
+                  ))
+                )}
               </div>
             </section>
 
