@@ -35,6 +35,9 @@ import {
   getConversations,
   getDocuments,
   getMessages,
+  getMcpPrompts,
+  getMcpResources,
+  getMcpServers,
   getTasks,
   getTools,
   login,
@@ -52,6 +55,9 @@ import type {
   Conversation,
   KnowledgeDocument,
   Message,
+  McpPrompt,
+  McpResource,
+  McpServer,
   StreamEvent,
   Task,
   ToolManifest,
@@ -70,6 +76,9 @@ type ConfirmationDecision = "pending" | "confirmed" | "cancelled";
 type ToolTrace = {
   id: string;
   tool_name: string;
+  provider?: string;
+  provider_tool_id?: string | null;
+  server_name?: string | null;
   status: ToolStatus;
   arguments: Record<string, unknown>;
   reason?: string;
@@ -131,6 +140,11 @@ function isCitation(value: unknown): value is Citation {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringFromRecord(value: Record<string, unknown> | undefined, key: string): string | undefined {
+  const item = value?.[key];
+  return typeof item === "string" ? item : undefined;
 }
 
 function messageMetadata(message: DraftMessage): Record<string, unknown> | undefined {
@@ -198,6 +212,13 @@ function normalizePersistedToolCalls(raw: unknown): ToolTrace[] {
       {
         id: `${item.tool_name}-${index}`,
         tool_name: item.tool_name,
+        provider: typeof item.provider === "string" ? item.provider : stringFromRecord(result, "provider"),
+        provider_tool_id:
+          typeof item.provider_tool_id === "string"
+            ? item.provider_tool_id
+            : stringFromRecord(result, "provider_tool_id"),
+        server_name:
+          typeof item.server_name === "string" ? item.server_name : stringFromRecord(result, "server_name"),
         status: isConfirmationBlock(item, result) ? "blocked" : status,
         arguments: isRecord(item.arguments) ? item.arguments : {},
         reason: typeof item.reason === "string" ? item.reason : undefined,
@@ -223,6 +244,9 @@ function normalizePersistedPlans(raw: unknown): AgentPlanData[] {
       {
         no_tool: false,
         tool_name: item.tool_name,
+        provider: typeof item.provider === "string" ? item.provider : undefined,
+        provider_tool_id: typeof item.provider_tool_id === "string" ? item.provider_tool_id : null,
+        server_name: typeof item.server_name === "string" ? item.server_name : null,
         arguments: isRecord(item.arguments) ? item.arguments : {},
         reason: typeof item.reason === "string" ? item.reason : `Use ${item.tool_name}`,
         requires_confirmation: Boolean(item.requires_confirmation)
@@ -274,6 +298,9 @@ function mergeToolResult(toolCalls: ToolTrace[], result: ToolResultData): ToolTr
   const nextCall: ToolTrace = {
     id: result.trace_id ?? `${result.tool_name}-${Date.now().toString(36)}`,
     tool_name: result.tool_name,
+    provider: result.provider,
+    provider_tool_id: result.provider_tool_id,
+    server_name: result.server_name,
     status: normalizeToolStatus(result.status),
     arguments: {},
     output_summary: result.output_summary,
@@ -295,6 +322,9 @@ function mergeToolResult(toolCalls: ToolTrace[], result: ToolResultData): ToolTr
       ? {
           ...tool,
           status,
+          provider: result.provider ?? tool.provider,
+          provider_tool_id: result.provider_tool_id ?? tool.provider_tool_id,
+          server_name: result.server_name ?? tool.server_name,
           output_summary: result.output_summary,
           error: result.error,
           duration_ms: result.duration_ms,
@@ -308,11 +338,24 @@ function isTaskTerminal(status: string): boolean {
   return ["succeeded", "failed", "cancelled", "stale"].includes(status);
 }
 
+function providerLabel(provider: string | undefined): string {
+  return provider === "mcp_server" ? "MCP" : "Local";
+}
+
+function taskEvents(task: Task): Record<string, unknown>[] {
+  const events = task.metadata?.events;
+  return Array.isArray(events) ? events.filter(isRecord) : [];
+}
+
 export function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<DraftMessage[]>([]);
   const [tools, setTools] = useState<ToolManifest[]>([]);
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
+  const [mcpResources, setMcpResources] = useState<McpResource[]>([]);
+  const [mcpPrompts, setMcpPrompts] = useState<McpPrompt[]>([]);
+  const [mcpError, setMcpError] = useState("");
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("Idle");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -385,6 +428,14 @@ export function App() {
       setActiveConversationId(items[0]?.id ?? null);
     });
     getTools().then(setTools);
+    Promise.all([getMcpServers(), getMcpResources(), getMcpPrompts()])
+      .then(([servers, resources, prompts]) => {
+        setMcpServers(servers);
+        setMcpResources(resources);
+        setMcpPrompts(prompts);
+        setMcpError("");
+      })
+      .catch((error) => setMcpError(error instanceof Error ? error.message : "Failed to load MCP"));
   }, [currentUser]);
 
   useEffect(() => {
@@ -740,6 +791,9 @@ export function App() {
             {
               id: toolId,
               tool_name: event.data.tool_name,
+              provider: event.data.provider,
+              provider_tool_id: event.data.provider_tool_id,
+              server_name: event.data.server_name,
               status: plan?.requires_confirmation ? "blocked" : "running",
               arguments: event.data.arguments,
               reason: event.data.reason ?? plan?.reason,
@@ -903,6 +957,8 @@ export function App() {
               <strong>Plan</strong>
               <p>{plan.reason || `Use ${plan.tool_name}`}</p>
               {plan.tool_name ? <code>{plan.tool_name}</code> : <code>no tool</code>}
+              {plan.provider ? <span className="provider-pill">{providerLabel(plan.provider)}</span> : null}
+              {plan.server_name ? <span className="muted">Server {plan.server_name}</span> : null}
             </div>
           </div>
         ))}
@@ -949,6 +1005,11 @@ export function App() {
             <strong>{tool.tool_name}</strong>
             <span>{tool.status === "running" ? "running" : `${tool.status} · ${formatDuration(tool.duration_ms)}`}</span>
           </div>
+          <div className="provider-row">
+            <span className="provider-pill">{providerLabel(tool.provider)}</span>
+            {tool.server_name ? <span>{tool.server_name}</span> : null}
+            {tool.provider_tool_id ? <code>{tool.provider_tool_id}</code> : null}
+          </div>
           {tool.reason ? <p>{tool.reason}</p> : null}
           <pre>{compactSummary(tool.arguments)}</pre>
           {tool.output_summary ? <p>{tool.output_summary}</p> : null}
@@ -981,6 +1042,7 @@ export function App() {
   function renderTask(task: Task) {
     const isCancelling = cancellingTaskIds.has(task.id);
     const canCancel = !isTaskTerminal(task.status);
+    const events = taskEvents(task);
     return (
       <div className="task-card" key={task.id}>
         <div className="task-card-header">
@@ -994,6 +1056,16 @@ export function App() {
           <span>{task.progress}%</span>
           {task.trace_id ? <span>{task.trace_id.slice(0, 10)}</span> : null}
         </div>
+        {events.length ? (
+          <div className="task-events">
+            {events.slice(-3).map((event, index) => (
+              <span key={`${task.id}-event-${index}`}>
+                {String(event.type ?? "event")}
+                {event.server_name ? ` · ${String(event.server_name)}` : ""}
+              </span>
+            ))}
+          </div>
+        ) : null}
         {task.error ? <p className="inline-error">{task.error}</p> : null}
         <button
           className="danger-action compact"
@@ -1334,13 +1406,56 @@ export function App() {
 
             <section>
               <div className="section-title">
+                <Settings2 size={18} aria-hidden="true" />
+                <h3>MCP</h3>
+              </div>
+              <div className="stack-list">
+                {mcpError ? <p className="inline-error">{mcpError}</p> : null}
+                {mcpServers.length === 0 ? (
+                  <p className="muted">No MCP servers configured.</p>
+                ) : (
+                  mcpServers.map((server) => (
+                    <div className="mini-card" key={server.name}>
+                      <div className="history-card-title">
+                        <strong>{server.name}</strong>
+                        <span className={`status-pill ${server.status}`}>{server.status}</span>
+                      </div>
+                      <span>{server.transport}</span>
+                      <p>
+                        {server.tool_count} tools · {server.resource_count} resources · {server.prompt_count} prompts
+                      </p>
+                    </div>
+                  ))
+                )}
+                {mcpResources.slice(0, 4).map((resource) => (
+                  <div className="mini-card" key={`${resource.server_name}-${resource.uri}`}>
+                    <strong>{resource.name || resource.uri}</strong>
+                    <span>{resource.server_name}</span>
+                    <code>{resource.uri}</code>
+                  </div>
+                ))}
+                {mcpPrompts.slice(0, 4).map((prompt) => (
+                  <div className="mini-card" key={`${prompt.server_name}-${prompt.name}`}>
+                    <strong>{prompt.name}</strong>
+                    <span>{prompt.server_name}</span>
+                    {prompt.description ? <p>{prompt.description}</p> : null}
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section>
+              <div className="section-title">
                 <Hammer size={18} aria-hidden="true" />
                 <h3>Tools</h3>
               </div>
               <div className="stack-list">
                 {tools.map((tool) => (
                   <div className="mini-card" key={tool.name}>
-                    <strong>{tool.name}</strong>
+                    <div className="history-card-title">
+                      <strong>{tool.name}</strong>
+                      <span className="provider-pill">{providerLabel(tool.provider)}</span>
+                    </div>
                     <span>{tool.requires_confirmation ? `${tool.permission} · confirm` : tool.permission}</span>
                     <p>{tool.description}</p>
                   </div>
@@ -1362,6 +1477,10 @@ export function App() {
                       <div className="history-card-title">
                         <strong>{tool.tool_name}</strong>
                         <span className={`status-pill ${tool.status}`}>{tool.status}</span>
+                      </div>
+                      <div className="provider-row">
+                        <span className="provider-pill">{providerLabel(tool.provider)}</span>
+                        {tool.server_name ? <span>{tool.server_name}</span> : null}
                       </div>
                       <span>{formatDuration(tool.duration_ms)}</span>
                       <pre>{compactSummary(tool.arguments)}</pre>
