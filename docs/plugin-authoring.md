@@ -78,17 +78,19 @@ validation, add explicit checks inside the handler and cover them with tests.
 
 ## Permissions
 
-`permission` is currently a label, not a complete sandbox policy. Use consistent,
-specific labels so reviewers and the UI can identify the risk class:
+Use the shared permission classes where possible: `read`, `write`, `execute`,
+`network`, and `destructive`. Legacy safe read-only plugins are treated as
+`read` by the MCP adapter.
 
-- `safe` for deterministic, read-only, low-risk helpers.
-- `filesystem_read` for reading workspace files.
-- `filesystem_write` for tools that write files.
-- `network` for tools that call remote services.
-- `shell` for tools that run local commands.
-
-Tools with write, network, shell, account, or destructive behavior should set
+Tools with write, execute, network, account, or destructive behavior should set
 `requires_confirmation: true`.
+
+## MCP-Compatible Schema
+
+Local plugin manifests are converted to MCP tool schemas with `parameters` as
+`inputSchema` and provider metadata in `annotations`. External MCP tools enter
+the same registry as `provider=mcp_server`, while local Python plugins remain
+`provider=local_plugin`.
 
 ## Confirmation
 

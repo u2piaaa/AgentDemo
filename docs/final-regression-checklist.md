@@ -35,7 +35,7 @@ Run backend tests:
 Minimum targeted fallback if time is tight:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_access_token_middleware.py tests/test_tool_routes.py tests/test_task_routes.py tests/test_plugin_registry.py tests/test_tool_executor.py tests/test_agent_runtime.py tests/test_rag.py tests/test_memory_routes.py
+.\.venv\Scripts\python.exe -m pytest tests/test_access_token_middleware.py tests/test_tool_routes.py tests/test_task_routes.py tests/test_plugin_registry.py tests/test_tool_executor.py tests/test_agent_runtime.py tests/test_rag.py tests/test_memory_routes.py tests/test_mcp_security.py tests/test_mcp_tooling.py
 ```
 
 Expected: tests pass. Live model tests may skip when API keys are absent.
@@ -120,6 +120,17 @@ With backend and frontend running:
     active memory summary is generated or updated when model credentials are
     configured. Without credentials, verify chat still succeeds and memory
     refresh is skipped.
+12. Verify no MCP config still leaves normal chat, RAG, tasks, and local tools
+    working.
+13. Verify the MCP server adapter lists `read_file`, `list_dir`, and
+    `search_files`.
+14. Verify MCP `read_file` cannot read outside the workspace.
+15. Verify a fake MCP tool appears in the tool list, can be planned by runtime,
+    writes a tool-call audit, and writes task metadata events.
+16. Verify MCP resource import creates a `mcp_resource` knowledge document and
+    citations show the MCP `source_uri`.
+17. Verify the frontend MCP panel handles empty, connected, and error states
+    without breaking chat.
 
 ## Known Release Notes
 
