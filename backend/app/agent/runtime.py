@@ -8,8 +8,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models.conversation import Conversation, Message
-from app.schemas import AgentExecutionState, AgentToolPlan, ChatRequest, ToolRunResponse
+from app.models.conversation import Conversation, MemorySummary, Message
+from app.schemas import (
+    AgentExecutionState,
+    AgentToolPlan,
+    ChatRequest,
+    ToolConfirmationRequest,
+    ToolRunResponse,
+)
 from app.services.model_gateway import ModelGateway
 from app.services.plugin_registry import PluginRegistry
 from app.services.rag import Citation, RagService
@@ -44,6 +50,16 @@ class AgentRuntime:
         except Exception as exc:
             yield self._event("error", {"message": str(exc), "trace_id": state.trace_id})
 
+    async def stream_confirmed_tool(
+        self, request: ToolConfirmationRequest
+    ) -> AsyncIterator[dict[str, str]]:
+        state = AgentExecutionState(user_id=self.user_id, message=request.message)
+        try:
+            async for event in self._execute_confirmed_tool(request, state):
+                yield event
+        except Exception as exc:
+            yield self._event("error", {"message": str(exc), "trace_id": state.trace_id})
+
     async def _execute(
         self, request: ChatRequest, state: AgentExecutionState
     ) -> AsyncIterator[dict[str, str]]:
@@ -53,6 +69,7 @@ class AgentRuntime:
 
         yield self._event("status", {"label": "load_history", "trace_id": state.trace_id})
         state.history = await self._load_recent_history(conversation.id)
+        state.memory_summaries = await self._load_active_memory_summaries(conversation.id)
         await self._auto_title_conversation(conversation, request.message, state.history)
 
         yield self._event("status", {"label": "save_user_message", "trace_id": state.trace_id})
@@ -73,10 +90,49 @@ class AgentRuntime:
 
         yield self._event("status", {"label": "save_assistant_message", "trace_id": state.trace_id})
         await self._save_assistant_message(state, route)
-        yield self._event(
+        await self._maybe_update_memory_summary(conversation.id)
+        yield self._done_event(conversation.id, state, route)
+
+    async def _execute_confirmed_tool(
+        self, request: ToolConfirmationRequest, state: AgentExecutionState
+    ) -> AsyncIterator[dict[str, str]]:
+        state.conversation_id = request.conversation_id
+
+        yield self._event("status", {"label": "load_history", "trace_id": state.trace_id})
+        state.history = await self._load_recent_history(request.conversation_id)
+        state.memory_summaries = await self._load_active_memory_summaries(request.conversation_id)
+
+        yield self._event("status", {"label": "retrieving_context", "trace_id": state.trace_id})
+        state.citations = self._dump_citations(
+            await self._retrieve_context(request.message, request.conversation_id)
+        )
+
+        route = self.model_gateway.route(request.task_type, request.message)
+        state.plan = AgentToolPlan(
+            no_tool=False,
+            tool_name=request.tool_name,
+            arguments=request.arguments,
+            reason=request.reason,
+            requires_confirmation=False,
+        )
+        yield self._event("plan", state.plan.model_dump())
+        async for event in self._maybe_execute_tool(state):
+            yield event
+
+        yield self._event("status", {"label": "generating", "model": route.model_name})
+        async for token in self._generate_answer(state, route.model_name):
+            yield self._event("token", {"text": token})
+
+        yield self._event("status", {"label": "save_assistant_message", "trace_id": state.trace_id})
+        await self._save_assistant_message(state, route)
+        await self._maybe_update_memory_summary(request.conversation_id)
+        yield self._done_event(request.conversation_id, state, route)
+
+    def _done_event(self, conversation_id: UUID, state: AgentExecutionState, route) -> dict[str, str]:
+        return self._event(
             "done",
             {
-                "conversation_id": str(conversation.id),
+                "conversation_id": str(conversation_id),
                 "citations": state.citations,
                 "tool_calls": state.tool_calls,
                 "trace_id": state.trace_id,
@@ -104,7 +160,8 @@ class AgentRuntime:
         state.final_answer = "".join(response_parts)
 
     def _answer_context(self, state: AgentExecutionState) -> list[str]:
-        context = [str(item["content"]) for item in state.citations if item.get("content")]
+        context = [f"Memory summary:\n{summary}" for summary in state.memory_summaries]
+        context.extend(str(item["content"]) for item in state.citations if item.get("content"))
         context.extend(f"Tool observation:\n{observation}" for observation in state.observations)
         return context
 
@@ -118,6 +175,7 @@ class AgentRuntime:
             metadata={
                 "citations": state.citations,
                 "tool_calls": state.tool_calls,
+                "memory_summaries": state.memory_summaries,
                 "trace_id": state.trace_id,
                 "model_route": asdict(route),
             },
@@ -175,6 +233,7 @@ class AgentRuntime:
                 "tool_name": plan.tool_name,
                 "arguments": plan.arguments,
                 "reason": plan.reason,
+                "requires_confirmation": plan.requires_confirmation,
                 "trace_id": state.trace_id,
             },
         )
@@ -228,16 +287,21 @@ class AgentRuntime:
         read_terms = ("read", "open", "inspect", "读取", "读一下", "查看", "看看")
         summary_terms = ("summarize", "summary", "总结", "概括", "归纳")
         return any(term in lowered for term in read_terms) and (
-            any(term in lowered for term in summary_terms) or self._extract_read_file_path(message) is not None
+            any(term in lowered for term in summary_terms)
+            or self._extract_read_file_path(message) is not None
         )
 
     def _extract_read_file_path(self, message: str) -> str | None:
         quoted = re.search(r"[`\"'“”‘’]([^`\"'“”‘’]+\.[A-Za-z0-9]+)[`\"'“”‘’]", message)
         if quoted:
             return quoted.group(1).strip()
-        bare = re.search(r"(?P<path>[\w./\\-]+\.(?:md|txt|py|json|ya?ml|toml))", message, re.IGNORECASE)
+        bare = re.search(
+            r"(?P<path>[\w./\\-]+\.(?:md|txt|py|json|ya?ml|toml))",
+            message,
+            re.IGNORECASE,
+        )
         if bare:
-            return bare.group("path").strip(" ，,。.!！?；;：:")
+            return bare.group("path").strip(" 。.!！？,，")
         return None
 
     async def _ensure_conversation(self, request: ChatRequest) -> Conversation:
@@ -267,9 +331,78 @@ class AgentRuntime:
             .order_by(Message.created_at.desc())
             .limit(limit)
         )
-        messages = list(result.scalars().all())
+        messages = [item for item in result.scalars().all() if isinstance(item, Message)]
         messages.reverse()
         return [{"role": message.role, "content": message.content} for message in messages]
+
+    async def _load_active_memory_summaries(self, conversation_id: UUID) -> list[str]:
+        result = await self.session.execute(
+            select(MemorySummary)
+            .where(MemorySummary.conversation_id == conversation_id)
+            .where(MemorySummary.valid_to.is_(None))
+            .order_by(MemorySummary.updated_at.desc(), MemorySummary.created_at.desc())
+            .limit(3)
+        )
+        return [
+            item.summary
+            for item in result.scalars().all()
+            if isinstance(item, MemorySummary) and item.summary
+        ]
+
+    async def _load_active_memory_records(self, conversation_id: UUID) -> list[MemorySummary]:
+        result = await self.session.execute(
+            select(MemorySummary)
+            .where(MemorySummary.conversation_id == conversation_id)
+            .where(MemorySummary.valid_to.is_(None))
+            .order_by(MemorySummary.updated_at.desc(), MemorySummary.created_at.desc())
+            .limit(1)
+        )
+        return [
+            item
+            for item in result.scalars().all()
+            if isinstance(item, MemorySummary) and item.summary
+        ]
+
+    async def _load_summary_source_messages(self, conversation_id: UUID) -> list[Message]:
+        result = await self.session.execute(
+            select(Message)
+            .where(Message.conversation_id == conversation_id)
+            .where(Message.role.in_(("user", "assistant")))
+            .order_by(Message.created_at.asc())
+        )
+        return [item for item in result.scalars().all() if isinstance(item, Message)]
+
+    async def _maybe_update_memory_summary(self, conversation_id: UUID) -> None:
+        messages = await self._load_summary_source_messages(conversation_id)
+        if len(messages) <= max(self.settings.agent_memory_message_limit, 0):
+            return
+
+        existing_records = await self._load_active_memory_records(conversation_id)
+        existing_summary = existing_records[0].summary if existing_records else None
+        try:
+            summary = await self.model_gateway.summarize_messages(
+                [{"role": item.role, "content": item.content} for item in messages],
+                existing_summary=existing_summary,
+            )
+        except Exception:
+            return
+        if not summary:
+            return
+
+        if existing_records:
+            existing_records[0].summary = summary
+            await self.session.commit()
+            return
+
+        self.session.add(
+            MemorySummary(
+                conversation_id=conversation_id,
+                summary=summary,
+                valid_from=messages[0].created_at if messages else None,
+                valid_to=None,
+            )
+        )
+        await self.session.commit()
 
     async def _auto_title_conversation(
         self,
@@ -304,9 +437,9 @@ class AgentRuntime:
         lowered = clean.lower()
         for prefix in sorted(prefixes, key=len, reverse=True):
             if lowered.startswith(prefix):
-                clean = clean[len(prefix) :].strip(" ：:，,。.!！?？")
+                clean = clean[len(prefix) :].strip(" ：:，,。.!！？")
                 break
-        return clean[:40].rstrip(" ：:，,。.!！?？") or "New conversation"
+        return clean[:40].rstrip(" ：:，,。.!！？") or "New conversation"
 
     async def _save_message(
         self,

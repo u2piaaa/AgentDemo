@@ -169,7 +169,41 @@ export async function streamChat(
   if (!response.ok) throw new Error(await readError(response, "Failed to start chat stream"));
   if (!response.body) throw new Error("Failed to start chat stream: empty response body");
 
-  const reader = response.body.getReader();
+  await readEventStream(response.body, onEvent);
+}
+
+export async function streamConfirmedTool(
+  payload: {
+    conversationId: string;
+    message: string;
+    toolName: string;
+    arguments: Record<string, unknown>;
+    reason?: string;
+  },
+  onEvent: (event: StreamEvent) => void
+): Promise<void> {
+  const response = await fetch("/api/conversations/chat/confirm/stream", {
+    method: "POST",
+    headers: jsonAuthHeaders(),
+    body: JSON.stringify({
+      conversation_id: payload.conversationId,
+      message: payload.message,
+      tool_name: payload.toolName,
+      arguments: payload.arguments,
+      reason: payload.reason ?? "Confirmed by the user."
+    })
+  });
+  if (!response.ok) throw new Error(await readError(response, "Failed to continue tool call"));
+  if (!response.body) throw new Error("Failed to continue tool call: empty response body");
+
+  await readEventStream(response.body, onEvent);
+}
+
+async function readEventStream(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (event: StreamEvent) => void
+): Promise<void> {
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
 

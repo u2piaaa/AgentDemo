@@ -39,6 +39,7 @@ import {
   register,
   setAuthToken,
   streamChat,
+  streamConfirmedTool,
   updateConversationTitle,
   uploadDocument
 } from "./api";
@@ -48,6 +49,7 @@ import type {
   Conversation,
   KnowledgeDocument,
   Message,
+  StreamEvent,
   Task,
   ToolManifest,
   ToolResultData,
@@ -56,7 +58,7 @@ import type {
 
 type DraftMessage = Pick<Message, "role" | "content"> & { id: string; metadata?: Record<string, unknown> };
 type ToolStatus = "running" | "success" | "failed" | "timeout" | "blocked" | "cancelled";
-type ConfirmationDecision = "pending" | "cancelled";
+type ConfirmationDecision = "pending" | "confirmed" | "cancelled";
 
 type ToolTrace = {
   id: string;
@@ -506,6 +508,152 @@ export function App() {
     });
   }
 
+  function findPreviousUserMessage(assistantMessageId: string): string {
+    const assistantIndex = messages.findIndex((message) => message.id === assistantMessageId);
+    for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+      if (messages[index]?.role === "user") {
+        return messages[index].content;
+      }
+    }
+    return "";
+  }
+
+  async function handleConfirmTool(assistantSourceId: string, tool: ToolTrace) {
+    if (!activeConversationId || isStreaming) return;
+    const originalMessage = findPreviousUserMessage(assistantSourceId);
+    if (!originalMessage) {
+      setStatus("Cannot confirm tool call: original user message is unavailable.");
+      return;
+    }
+
+    const assistantMessageId = makeClientId("assistant-confirmed");
+    setConfirmationDecisions((current) => ({ ...current, [tool.id]: "confirmed" }));
+    setIsStreaming(true);
+    setStatus(`Continuing ${tool.tool_name}`);
+    setExecutionTraces((current) => ({
+      ...current,
+      [assistantMessageId]: { plans: [], toolCalls: [] }
+    }));
+    setMessages((current) => [
+      ...current,
+      { id: assistantMessageId, role: "assistant", content: "" }
+    ]);
+
+    try {
+      await streamConfirmedTool(
+        {
+          conversationId: activeConversationId,
+          message: originalMessage,
+          toolName: tool.tool_name,
+          arguments: tool.arguments,
+          reason: tool.reason ? `Confirmed: ${tool.reason}` : `Confirmed ${tool.tool_name}.`
+        },
+        (event) => handleRuntimeEvent(assistantMessageId, event)
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to continue tool call";
+      setStatus(message);
+      setExecutionTraces((current) => {
+        const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
+        return { ...current, [assistantMessageId]: { ...trace, error: message } };
+      });
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantMessageId && !item.content
+            ? { ...item, content: `Request failed: ${message}` }
+            : item
+        )
+      );
+    } finally {
+      setIsStreaming(false);
+    }
+  }
+
+  function handleRuntimeEvent(assistantMessageId: string, event: StreamEvent) {
+    if (event.event === "status") {
+      setStatus(event.data.model ? `${event.data.label}: ${event.data.model}` : event.data.label);
+    }
+    if (event.event === "plan") {
+      setExecutionTraces((current) => {
+        const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
+        return {
+          ...current,
+          [assistantMessageId]: {
+            ...trace,
+            plans: event.data.no_tool ? trace.plans : [...trace.plans, event.data]
+          }
+        };
+      });
+    }
+    if (event.event === "tool_call") {
+      setExecutionTraces((current) => {
+        const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
+        const plan = [...trace.plans].reverse().find((item) => item.tool_name === event.data.tool_name);
+        const toolId = `${event.data.trace_id ?? event.data.tool_name}-${trace.toolCalls.length}`;
+        return {
+          ...current,
+          [assistantMessageId]: {
+            ...trace,
+            toolCalls: [
+              ...trace.toolCalls,
+              {
+                id: toolId,
+                tool_name: event.data.tool_name,
+                status: plan?.requires_confirmation ? "blocked" : "running",
+                arguments: event.data.arguments,
+                reason: event.data.reason ?? plan?.reason,
+                trace_id: event.data.trace_id,
+                requires_confirmation: event.data.requires_confirmation ?? plan?.requires_confirmation
+              }
+            ]
+          }
+        };
+      });
+    }
+    if (event.event === "tool_result") {
+      setExecutionTraces((current) => {
+        const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
+        return {
+          ...current,
+          [assistantMessageId]: {
+            ...trace,
+            toolCalls: mergeToolResult(trace.toolCalls, event.data)
+          }
+        };
+      });
+    }
+    if (event.event === "error") {
+      setStatus(event.data.message);
+      setExecutionTraces((current) => {
+        const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
+        return { ...current, [assistantMessageId]: { ...trace, error: event.data.message } };
+      });
+    }
+    if (event.event === "token") {
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantMessageId
+            ? { ...message, content: message.content + event.data.text }
+            : message
+        )
+      );
+    }
+    if (event.event === "done") {
+      const conversationId = event.data.conversation_id;
+      setActiveConversationId(conversationId);
+      setCitations(event.data.citations);
+      setStatus("Done");
+      void getConversations().then(async (items) => {
+        setConversations(items);
+        const loadedMessages = await getMessages(conversationId);
+        const loadedDocuments = await getDocuments(conversationId);
+        setMessages(loadedMessages);
+        setDocuments(loadedDocuments);
+        void getTasks(conversationId).then(setTasks).catch(() => undefined);
+      });
+    }
+  }
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const text = input.trim();
@@ -527,92 +675,7 @@ export function App() {
     ]);
 
     try {
-      await streamChat(text, activeConversationId, (event) => {
-        if (event.event === "status") {
-          setStatus(event.data.model ? `${event.data.label}: ${event.data.model}` : event.data.label);
-        }
-        if (event.event === "plan") {
-          setExecutionTraces((current) => {
-            const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
-            return {
-              ...current,
-              [assistantMessageId]: {
-                ...trace,
-                plans: event.data.no_tool ? trace.plans : [...trace.plans, event.data]
-              }
-            };
-          });
-        }
-        if (event.event === "tool_call") {
-          setExecutionTraces((current) => {
-            const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
-            const plan = [...trace.plans]
-              .reverse()
-              .find((item) => item.tool_name === event.data.tool_name);
-            const toolId = `${event.data.trace_id ?? event.data.tool_name}-${trace.toolCalls.length}`;
-            return {
-              ...current,
-              [assistantMessageId]: {
-                ...trace,
-                toolCalls: [
-                  ...trace.toolCalls,
-                  {
-                    id: toolId,
-                    tool_name: event.data.tool_name,
-                    status: plan?.requires_confirmation ? "blocked" : "running",
-                    arguments: event.data.arguments,
-                    reason: event.data.reason ?? plan?.reason,
-                    trace_id: event.data.trace_id,
-                    requires_confirmation: event.data.requires_confirmation ?? plan?.requires_confirmation
-                  }
-                ]
-              }
-            };
-          });
-        }
-        if (event.event === "tool_result") {
-          setExecutionTraces((current) => {
-            const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
-            return {
-              ...current,
-              [assistantMessageId]: {
-                ...trace,
-                toolCalls: mergeToolResult(trace.toolCalls, event.data)
-              }
-            };
-          });
-        }
-        if (event.event === "error") {
-          setStatus(event.data.message);
-          setExecutionTraces((current) => {
-            const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
-            return { ...current, [assistantMessageId]: { ...trace, error: event.data.message } };
-          });
-        }
-        if (event.event === "token") {
-          setMessages((current) =>
-            current.map((message) =>
-              message.id === assistantMessageId
-                ? { ...message, content: message.content + event.data.text }
-                : message
-            )
-          );
-        }
-        if (event.event === "done") {
-          const conversationId = event.data.conversation_id;
-          setActiveConversationId(conversationId);
-          setCitations(event.data.citations);
-          setStatus("Done");
-          void getConversations().then(async (items) => {
-            setConversations(items);
-            const loadedMessages = await getMessages(conversationId);
-            const loadedDocuments = await getDocuments(conversationId);
-            setMessages(loadedMessages);
-            setDocuments(loadedDocuments);
-            void getTasks(conversationId).then(setTasks).catch(() => undefined);
-          });
-        }
-      });
+      await streamChat(text, activeConversationId, (event) => handleRuntimeEvent(assistantMessageId, event));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Request failed";
       setStatus(message);
@@ -680,7 +743,7 @@ export function App() {
             </div>
           </div>
         ))}
-        {trace?.toolCalls.map((tool) => renderToolStep(tool))}
+        {trace?.toolCalls.map((tool) => renderToolStep(message.id, tool))}
         {trace?.error ? (
           <div className="execution-step failed">
             <AlertCircle size={15} aria-hidden="true" />
@@ -703,9 +766,10 @@ export function App() {
     );
   }
 
-  function renderToolStep(tool: ToolTrace) {
+  function renderToolStep(messageId: string, tool: ToolTrace) {
     const decision = confirmationDecisions[tool.id];
-    const needsConfirmation = tool.requires_confirmation && tool.status === "blocked" && decision !== "cancelled";
+    const needsConfirmation =
+      tool.requires_confirmation && tool.status === "blocked" && !["cancelled", "confirmed"].includes(decision ?? "");
     return (
       <div className={`execution-step tool-step ${tool.status}`} key={tool.id}>
         {tool.status === "running" ? (
@@ -728,9 +792,14 @@ export function App() {
           {tool.error ? <p className="inline-error">{tool.error}</p> : null}
           {needsConfirmation ? (
             <div className="confirmation-box">
-              <p>This tool requires confirmation, but this stream cannot be resumed yet.</p>
+              <p>This tool requires confirmation before it can run.</p>
               <div className="confirmation-actions">
-                <button className="secondary-action compact" type="button" disabled title="Backend continue endpoint is not available yet">
+                <button
+                  className="secondary-action compact"
+                  type="button"
+                  disabled={isStreaming}
+                  onClick={() => void handleConfirmTool(messageId, tool)}
+                >
                   <Check size={15} aria-hidden="true" />
                   Confirm
                 </button>
