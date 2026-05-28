@@ -72,6 +72,9 @@ class ChatEvent(BaseModel):
 class AgentToolPlan(BaseModel):
     no_tool: bool = True
     tool_name: str | None = None
+    provider: str = "local_plugin"
+    provider_tool_id: str | None = None
+    server_name: str | None = None
     arguments: dict[str, Any] = Field(default_factory=dict)
     reason: str = ""
     requires_confirmation: bool = False
@@ -84,6 +87,8 @@ class AgentExecutionState(BaseModel):
     history: list[dict[str, str]] = Field(default_factory=list)
     memory_summaries: list[str] = Field(default_factory=list)
     citations: list[dict[str, Any]] = Field(default_factory=list)
+    mcp_resources: list[dict[str, Any]] = Field(default_factory=list)
+    mcp_prompts: list[dict[str, Any]] = Field(default_factory=list)
     plan: AgentToolPlan = Field(default_factory=AgentToolPlan)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     observations: list[str] = Field(default_factory=list)

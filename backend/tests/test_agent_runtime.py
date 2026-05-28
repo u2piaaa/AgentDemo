@@ -5,10 +5,13 @@ from uuid import uuid4
 import pytest
 
 from app.agent.runtime import AgentRuntime
+from app.mcp.client import McpClientManager
+from app.mcp.config import McpConfig, McpServerConfig
+from app.mcp.registry import UnifiedToolRegistry
 from app.models.conversation import Conversation, MemorySummary, Message
 from app.schemas import AgentToolPlan, ChatRequest, ToolConfirmationRequest
-from app.services.model_gateway import ModelRoute
-from app.services.plugin_registry import PluginManifest, RegisteredTool
+from app.services.model_gateway import ModelRoute, StructuredToolPlan
+from app.services.plugin_registry import PluginManifest, PluginRegistry, RegisteredTool
 
 
 class ScalarResult:
@@ -58,6 +61,22 @@ class FakeGateway:
 
     def route(self, task_type: str, prompt: str) -> ModelRoute:
         return ModelRoute(model_name="fake-chat", provider="fake", reason=f"fake_{task_type}")
+
+    def plan_tool_call(self, prompt: str, candidates: list[dict]) -> StructuredToolPlan:
+        lowered = prompt.lower()
+        for tool in candidates:
+            names = [
+                str(tool.get("name") or "").lower(),
+                str(tool.get("provider_tool_id") or "").lower(),
+            ]
+            if any(name and name in lowered for name in names):
+                return StructuredToolPlan(
+                    no_tool=False,
+                    tool_name=str(tool["name"]),
+                    arguments={},
+                    reason="fake mcp plan",
+                )
+        return StructuredToolPlan(no_tool=True, reason="fake no tool")
 
     async def stream_reply(
         self,
@@ -124,6 +143,45 @@ def successful_read_file(path: str) -> dict[str, str | int]:
 
 def failing_read_file(path: str) -> None:
     raise FileNotFoundError(f"missing {path}")
+
+
+async def make_mcp_registry() -> UnifiedToolRegistry:
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="fake",
+                    tools=[
+                        {
+                            "name": "lookup",
+                            "description": "Lookup from fake MCP.",
+                            "inputSchema": {"type": "object"},
+                            "annotations": {"permission": "read"},
+                            "mock_result": {
+                                "content": [{"type": "text", "text": "fake mcp value"}]
+                            },
+                        }
+                    ],
+                    resources=[
+                        {
+                            "uri": "mcp://fake/doc",
+                            "name": "fake doc",
+                            "text": "resource context from MCP",
+                        }
+                    ],
+                    prompts=[
+                        {
+                            "name": "tool_planning",
+                            "messages": [{"role": "user", "content": "prompt from MCP"}],
+                        }
+                    ],
+                )
+            ]
+        )
+    )
+    registry = UnifiedToolRegistry(PluginRegistry(Path(".")), client)
+    await registry.refresh_mcp_tools()
+    return registry
 
 
 async def collect_events(runtime: AgentRuntime, message: str) -> list[tuple[str, dict]]:
@@ -196,6 +254,51 @@ async def test_tool_failure_is_available_to_final_answer() -> None:
     tool_result = next(data for name, data in events if name == "tool_result")
     assert tool_result["status"] == "failed"
     assert "could not read" in assistant_messages(session)[0].content
+
+
+@pytest.mark.asyncio
+async def test_fake_mcp_tool_is_planned_and_called() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=await make_mcp_registry(),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "Use fake lookup for this answer")
+
+    tool_call = next(data for name, data in events if name == "tool_call")
+    tool_result = next(data for name, data in events if name == "tool_result")
+    assert tool_call["provider"] == "mcp_server"
+    assert tool_call["server_name"] == "fake"
+    assert tool_result["provider"] == "mcp_server"
+    assert tool_result["output"]["content"] == "fake mcp value"
+    metadata = assistant_messages(session)[0].metadata_
+    assert metadata["tool_calls"][0]["provider"] == "mcp_server"
+
+
+@pytest.mark.asyncio
+async def test_mcp_resource_and_prompt_enter_answer_context() -> None:
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=FakeSession(),
+        plugin_registry=await make_mcp_registry(),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(
+        runtime,
+        "Use mcp://fake/doc and tool_planning as context.",
+    )
+
+    context = "\n".join(gateway.stream_calls[0]["context"])
+    assert "resource context from MCP" in context
+    assert "prompt from MCP" in context
+    done = events[-1][1]
+    assert done["mcp_resources"][0]["uri"] == "mcp://fake/doc"
 
 
 @pytest.mark.asyncio
