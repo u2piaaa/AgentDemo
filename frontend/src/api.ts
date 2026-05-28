@@ -13,9 +13,17 @@ import type {
 
 const jsonHeaders = { "Content-Type": "application/json" };
 let authToken = localStorage.getItem("agent_auth_token") ?? "";
+let accessToken = localStorage.getItem("agent_access_token") ?? "";
+
+function accessHeaders(token = accessToken): Record<string, string> {
+  return token ? { "x-agent-access-token": token } : {};
+}
 
 function authHeaders(): Record<string, string> {
-  return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+  return {
+    ...accessHeaders(),
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
+  };
 }
 
 function jsonAuthHeaders(): Record<string, string> {
@@ -32,10 +40,30 @@ export function clearAuthToken() {
   localStorage.removeItem("agent_auth_token");
 }
 
+export function setAccessToken(token: string) {
+  accessToken = token;
+  localStorage.setItem("agent_access_token", token);
+}
+
+export function clearAccessToken() {
+  accessToken = "";
+  localStorage.removeItem("agent_access_token");
+}
+
 export async function getAuthStatus(): Promise<{ required: boolean }> {
   const response = await fetch("/api/auth/status");
   if (!response.ok) throw new Error("Failed to load auth status");
   return response.json();
+}
+
+export async function checkAccessToken(token = accessToken): Promise<boolean> {
+  const response = await fetch("/api/auth/check", {
+    method: "POST",
+    headers: accessHeaders(token)
+  });
+  if (!response.ok) return false;
+  const payload = await response.json();
+  return Boolean(payload.ok);
 }
 
 export async function register(username: string, password: string): Promise<AuthResponse> {
@@ -169,7 +197,41 @@ export async function streamChat(
   if (!response.ok) throw new Error(await readError(response, "Failed to start chat stream"));
   if (!response.body) throw new Error("Failed to start chat stream: empty response body");
 
-  const reader = response.body.getReader();
+  await readEventStream(response.body, onEvent);
+}
+
+export async function streamConfirmedTool(
+  payload: {
+    conversationId: string;
+    message: string;
+    toolName: string;
+    arguments: Record<string, unknown>;
+    reason?: string;
+  },
+  onEvent: (event: StreamEvent) => void
+): Promise<void> {
+  const response = await fetch("/api/conversations/chat/confirm/stream", {
+    method: "POST",
+    headers: jsonAuthHeaders(),
+    body: JSON.stringify({
+      conversation_id: payload.conversationId,
+      message: payload.message,
+      tool_name: payload.toolName,
+      arguments: payload.arguments,
+      reason: payload.reason ?? "Confirmed by the user."
+    })
+  });
+  if (!response.ok) throw new Error(await readError(response, "Failed to continue tool call"));
+  if (!response.body) throw new Error("Failed to continue tool call: empty response body");
+
+  await readEventStream(response.body, onEvent);
+}
+
+async function readEventStream(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (event: StreamEvent) => void
+): Promise<void> {
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
 

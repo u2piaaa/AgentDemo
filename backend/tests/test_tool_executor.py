@@ -219,6 +219,7 @@ async def test_tool_run_records_success_audit() -> None:
     assert audit.conversation_id == conversation_id
     assert audit.task_id == task_id
     assert audit.tool_name == "example"
+    assert audit.provider == "local_plugin"
     assert audit.status == "success"
     assert audit.input == {"text": "ok"}
     assert audit.input_summary == '{"text": "ok"}'

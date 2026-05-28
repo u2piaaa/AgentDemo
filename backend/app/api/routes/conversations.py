@@ -9,7 +9,14 @@ from app.api.routes.auth import CurrentUser
 from app.agent.runtime import AgentRuntime
 from app.db.database import get_session
 from app.models.conversation import Conversation, Message
-from app.schemas import ChatRequest, ConversationCreate, ConversationRead, ConversationUpdate, MessageRead
+from app.schemas import (
+    ChatRequest,
+    ConversationCreate,
+    ConversationRead,
+    ConversationUpdate,
+    MessageRead,
+    ToolConfirmationRequest,
+)
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -107,6 +114,25 @@ async def chat_stream(
         user_id=current_user.id,
     )
     return EventSourceResponse(runtime.stream(payload))
+
+
+@router.post("/chat/confirm/stream")
+async def confirm_tool_stream(
+    payload: ToolConfirmationRequest,
+    request: Request,
+    current_user: CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> EventSourceResponse:
+    conversation = await get_owned_conversation(session, payload.conversation_id, current_user.id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=request.app.state.plugin_registry,
+        user_id=current_user.id,
+    )
+    return EventSourceResponse(runtime.stream_confirmed_tool(payload))
 
 
 async def get_owned_conversation(
