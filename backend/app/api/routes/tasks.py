@@ -76,6 +76,18 @@ async def get_task(
     return task
 
 
+@router.get("/{task_id}/events")
+async def get_task_events(
+    task_id: UUID,
+    current_user: CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    task = await get_owned_task(session, task_id, current_user.id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return list((task.metadata_ or {}).get("events") or [])
+
+
 @router.patch("/{task_id}", response_model=TaskRead)
 async def update_task(
     task_id: UUID,

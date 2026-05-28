@@ -29,6 +29,10 @@ export type ToolManifest = {
   name: string;
   description: string;
   permission: string;
+  provider: "local_plugin" | "mcp_server" | string;
+  provider_tool_id?: string | null;
+  transport: string;
+  server_name?: string | null;
   requires_confirmation: boolean;
   enabled: boolean;
   parameters: Record<string, unknown>;
@@ -50,6 +54,30 @@ export type Citation = {
   title: string;
   chunk_index: number;
   content: string;
+  source_type?: string;
+  source_uri?: string | null;
+};
+
+export type McpServer = {
+  name: string;
+  transport: string;
+  status: "connected" | "disconnected" | "error" | "disabled" | string;
+  tool_count: number;
+  resource_count: number;
+  prompt_count: number;
+};
+
+export type McpResource = {
+  server_name: string;
+  uri: string;
+  name?: string;
+  mimeType?: string;
+};
+
+export type McpPrompt = {
+  server_name: string;
+  name: string;
+  description?: string;
 };
 
 export type Task = {
@@ -68,6 +96,9 @@ export type Task = {
 export type AgentPlanData = {
   no_tool: boolean;
   tool_name: string | null;
+  provider?: string;
+  provider_tool_id?: string | null;
+  server_name?: string | null;
   arguments: Record<string, unknown>;
   reason: string;
   requires_confirmation: boolean;
@@ -75,6 +106,9 @@ export type AgentPlanData = {
 
 export type ToolCallData = {
   tool_name: string;
+  provider?: string;
+  provider_tool_id?: string | null;
+  server_name?: string | null;
   arguments: Record<string, unknown>;
   reason?: string;
   trace_id?: string;
@@ -83,6 +117,9 @@ export type ToolCallData = {
 
 export type ToolResultData = {
   tool_name: string;
+  provider?: string;
+  provider_tool_id?: string | null;
+  server_name?: string | null;
   status: string;
   output?: unknown;
   output_summary?: string | null;
@@ -104,6 +141,8 @@ export type StreamEvent =
         conversation_id: string;
         citations: Citation[];
         tool_calls?: unknown[];
+        mcp_resources?: McpResource[];
+        mcp_prompts?: McpPrompt[];
         trace_id?: string;
         model_route?: Record<string, unknown>;
       };

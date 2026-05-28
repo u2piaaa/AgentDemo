@@ -6,12 +6,16 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.mcp_security import McpIdentity, enforce_mcp_tool_policy
+from app.mcp.tools import normalize_mcp_tool_result
+from app.models.task import Task
 from app.models.tool import ToolCall
 from app.schemas import ToolRunResponse
-from app.services.plugin_registry import RegisteredTool
+from app.services.plugin_registry import TOOL_PROVIDER_MCP_SERVER, RegisteredTool
 
 
 class ToolExecutor:
@@ -28,6 +32,7 @@ class ToolExecutor:
         user_id: UUID | None = None,
         conversation_id: UUID | None = None,
         task_id: UUID | None = None,
+        identity: McpIdentity | None = None,
     ) -> ToolRunResponse:
         trace_id = uuid4().hex
         started = perf_counter()
@@ -50,11 +55,21 @@ class ToolExecutor:
             )
             return response
 
+        if tool.provider == TOOL_PROVIDER_MCP_SERVER:
+            await self._record_mcp_task_event(
+                session,
+                task_id,
+                "mcp_tool_call_started",
+                tool,
+                {"trace_id": trace_id},
+                progress=25,
+            )
+
         try:
             self._validate_arguments(tool, arguments)
             timeout = min(tool.manifest.timeout_seconds, self.settings.tool_timeout_seconds)
             output = await asyncio.wait_for(
-                asyncio.to_thread(tool.handler, **arguments),
+                self._dispatch_tool(tool, arguments, confirmed=confirmed, identity=identity),
                 timeout=timeout,
             )
         except TimeoutError:
@@ -99,6 +114,9 @@ class ToolExecutor:
     ) -> ToolRunResponse:
         return ToolRunResponse(
             tool_name=tool.manifest.name,
+            provider=tool.provider,
+            provider_tool_id=tool.provider_tool_id or tool.manifest.name,
+            server_name=tool.server_name,
             status=status,
             output=output,
             output_summary=self._summarize(output),
@@ -229,6 +247,7 @@ class ToolExecutor:
                 conversation_id=conversation_id,
                 task_id=task_id,
                 tool_name=tool.manifest.name,
+                provider=tool.provider,
                 status=response.status,
                 input=arguments,
                 input_summary=self._summarize(arguments),
@@ -238,4 +257,74 @@ class ToolExecutor:
                 trace_id=response.trace_id,
             )
         )
+        await self._record_mcp_task_event(
+            session,
+            task_id,
+            "mcp_tool_call_finished" if response.status == "success" else "mcp_tool_call_failed",
+            tool,
+            {
+                "trace_id": response.trace_id,
+                "status": response.status,
+                "error": response.error,
+                "duration_ms": response.duration_ms,
+            },
+            progress=100 if response.status == "success" else None,
+            commit=False,
+        )
         await session.commit()
+
+    async def _dispatch_tool(
+        self,
+        tool: RegisteredTool,
+        arguments: dict[str, Any],
+        *,
+        confirmed: bool,
+        identity: McpIdentity | None,
+    ) -> Any:
+        if tool.provider == TOOL_PROVIDER_MCP_SERVER:
+            if tool.client is None or tool.server_name is None or tool.provider_tool_id is None:
+                raise RuntimeError("MCP tool is missing client metadata")
+            enforce_mcp_tool_policy(
+                permission=tool.manifest.permission,
+                requires_confirmation=tool.manifest.requires_confirmation,
+                confirmed=confirmed,
+                identity=identity or McpIdentity(),
+            )
+            result = await tool.client.call_tool(tool.server_name, tool.provider_tool_id, arguments)
+            return normalize_mcp_tool_result(result)
+        if tool.handler is None:
+            raise RuntimeError("Local tool is missing a handler")
+        return await asyncio.to_thread(tool.handler, **arguments)
+
+    async def _record_mcp_task_event(
+        self,
+        session: AsyncSession | None,
+        task_id: UUID | None,
+        event_type: str,
+        tool: RegisteredTool,
+        payload: dict[str, Any],
+        *,
+        progress: int | None = None,
+        commit: bool = True,
+    ) -> None:
+        if session is None or task_id is None or tool.provider != TOOL_PROVIDER_MCP_SERVER:
+            return
+        result = await session.execute(select(Task).where(Task.id == task_id))
+        task = result.scalar_one_or_none()
+        if task is None:
+            return
+        event = {
+            "type": event_type,
+            "tool_name": tool.manifest.name,
+            "provider": tool.provider,
+            "server_name": tool.server_name,
+            "provider_tool_id": tool.provider_tool_id,
+            **payload,
+        }
+        metadata = dict(task.metadata_ or {})
+        metadata["events"] = [*(metadata.get("events") or []), event]
+        task.metadata_ = metadata
+        if progress is not None:
+            task.progress = max(task.progress or 0, progress)
+        if commit:
+            await session.commit()

@@ -31,6 +31,7 @@ class ToolCall(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         PgUUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), index=True
     )
     tool_name: Mapped[str] = mapped_column(String(120), index=True)
+    provider: Mapped[str] = mapped_column(String(40), default="local_plugin", index=True)
     status: Mapped[str] = mapped_column(String(32), default="running")
     input: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     input_summary: Mapped[str | None] = mapped_column(Text)

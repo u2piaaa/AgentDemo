@@ -37,13 +37,13 @@ class FakeRegistry:
 
 
 class FakeToolExecutor:
-    async def run(self, tool: FakeTool, arguments: dict) -> ToolRunResponse:
+    async def run(self, tool: FakeTool, arguments: dict, **kwargs) -> ToolRunResponse:
         return ToolRunResponse(tool_name="read_file", duration_ms=1, output={"ok": True})
 
 
 def make_client(authenticated: bool, monkeypatch) -> TestClient:
     app = FastAPI()
-    app.state.plugin_registry = FakeRegistry()
+    app.state.tool_registry = FakeRegistry()
     app.include_router(tools.router, prefix="/api")
     monkeypatch.setattr(tools, "ToolExecutor", lambda: FakeToolExecutor())
 
