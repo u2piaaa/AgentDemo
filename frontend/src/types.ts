@@ -22,6 +22,7 @@ export type Message = {
   content: string;
   created_at: string;
   metadata?: Record<string, unknown>;
+  metadata_?: Record<string, unknown>;
 };
 
 export type ToolManifest = {
