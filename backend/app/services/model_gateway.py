@@ -14,6 +14,14 @@ class ModelRoute:
     reason: str
 
 
+@dataclass(frozen=True)
+class StructuredToolPlan:
+    no_tool: bool
+    tool_name: str | None = None
+    arguments: dict[str, Any] | None = None
+    reason: str = ""
+
+
 class ModelGateway:
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -24,6 +32,26 @@ class ModelGateway:
             provider="deepseek",
             reason=f"agent_{task_type}_chat",
         )
+
+    def plan_tool_call(
+        self,
+        prompt: str,
+        candidates: list[dict[str, Any]],
+    ) -> StructuredToolPlan:
+        lowered = prompt.lower()
+        for tool in candidates:
+            names = [
+                str(tool.get("name") or "").lower(),
+                str(tool.get("provider_tool_id") or "").lower(),
+            ]
+            if any(name and name in lowered for name in names):
+                return StructuredToolPlan(
+                    no_tool=False,
+                    tool_name=str(tool["name"]),
+                    arguments={},
+                    reason="The user explicitly referenced an available tool.",
+                )
+        return StructuredToolPlan(no_tool=True, reason="No tool is needed for this message.")
 
     async def stream_reply(
         self,
@@ -69,6 +97,35 @@ class ModelGateway:
             response.raise_for_status()
             data = response.json()["data"]
         return [item["embedding"] for item in sorted(data, key=lambda item: item["index"])]
+
+    async def summarize_messages(
+        self,
+        messages: list[dict[str, str]],
+        existing_summary: str | None = None,
+    ) -> str:
+        if not messages:
+            return existing_summary or ""
+        transcript = "\n".join(
+            f"{item['role']}: {item['content']}"
+            for item in messages
+            if item.get("role") in {"user", "assistant"} and item.get("content")
+        )
+        prompt = (
+            "Summarize this conversation for future memory. Keep durable user preferences, "
+            "project facts, decisions, and unresolved tasks. Do not include transient filler."
+        )
+        context = [f"Existing memory summary:\n{existing_summary}"] if existing_summary else []
+        context.append(f"Conversation transcript:\n{transcript}")
+        route = self.route("memory_summary", prompt)
+        parts: list[str] = []
+        async for token in self.stream_reply(
+            model_name=route.model_name,
+            prompt=prompt,
+            context=context,
+            history=[],
+        ):
+            parts.append(token)
+        return "".join(parts).strip()
 
     def _build_messages(
         self,
