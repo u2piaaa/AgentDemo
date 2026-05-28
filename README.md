@@ -245,8 +245,28 @@ Python entrypoint. See [Plugin Authoring](docs/plugin-authoring.md) for manifest
 fields, supported JSON Schema validation, permissions, confirmation behavior,
 safe path rules, output summaries, and plugin test patterns.
 
-The first version loads only local plugins. Remote plugin installation and a
-plugin marketplace are out of scope.
+AgentDemo v2 also maps local plugins to MCP-compatible schemas and can register
+configured external MCP tools through the same executor path.
+
+## MCP Compatibility
+
+AgentDemo can act as an MCP-compatible server for local tools and as an MCP
+client for configured external servers. Server mode exposes local tools through
+`backend/app/mcp/server.py`; client mode loads configured servers through
+`backend/app/mcp/config.py` and `backend/app/mcp/client.py`.
+
+MCP calls never bypass the local tool executor. Tool calls still use argument
+validation, confirmation, audit rows, trace IDs, user/task binding, and frontend
+timeline events. The default policy is local-only; remote MCP exposure requires
+explicit configuration.
+
+MCP resources can be used as runtime context or imported as RAG documents with
+`source_type=mcp_resource` and `source_uri` set to the MCP URI. MCP prompts can
+be selected by name as runtime context. The frontend shows MCP servers, tools,
+resources, prompts, provider labels, and task events.
+
+See [MCP Compatibility](docs/mcp-compatibility.md) for the full mapping and
+security model.
 
 ## Tests
 
