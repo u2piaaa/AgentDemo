@@ -39,7 +39,7 @@ class AgentRuntime:
         self.mcp_client = getattr(plugin_registry, "mcp_client", None)
         self.user_id = user_id
         self.model_gateway = model_gateway or ModelGateway()
-        self.rag = rag_service or RagService(session)
+        self.rag = rag_service or RagService(session, user_id=user_id)
         self.tool_executor = tool_executor or ToolExecutor()
         self.max_tool_rounds = max(max_tool_rounds, 0)
         self.settings = get_settings()

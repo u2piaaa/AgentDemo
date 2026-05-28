@@ -183,8 +183,16 @@ class KnowledgeDocumentCreate(BaseModel):
     title: str
     source_type: str = "text"
     source_uri: str | None = None
+    user_id: UUID | None = None
     conversation_id: UUID | None = None
     content: str
+
+
+class McpResourceImportRequest(BaseModel):
+    server_name: str = Field(min_length=1)
+    uri: str = Field(min_length=1)
+    title: str | None = None
+    conversation_id: UUID | None = None
 
 
 class KnowledgeDocumentRead(BaseModel):
@@ -202,6 +210,7 @@ class CitationMetadata(BaseModel):
     document_title: str
     chunk_index: int
     source_type: str
+    source_uri: str | None = None
     score: float
     retrieval_method: str
 
@@ -212,6 +221,7 @@ class CitationRead(BaseModel):
     chunk_index: int
     content: str
     source_type: str
+    source_uri: str | None = None
     score: float
     retrieval_method: str
     metadata: CitationMetadata

@@ -16,6 +16,7 @@ class Citation:
     chunk_index: int
     content: str
     source_type: str
+    source_uri: str | None
     score: float
     retrieval_method: str
 
@@ -24,6 +25,7 @@ class Citation:
             "document_title": self.title,
             "chunk_index": self.chunk_index,
             "source_type": self.source_type,
+            "source_uri": self.source_uri,
             "score": self.score,
             "retrieval_method": self.retrieval_method,
         }
@@ -33,6 +35,7 @@ class Citation:
             "chunk_index": self.chunk_index,
             "content": self.content,
             "source_type": self.source_type,
+            "source_uri": self.source_uri,
             "score": self.score,
             "retrieval_method": self.retrieval_method,
             "metadata": metadata,
@@ -40,13 +43,15 @@ class Citation:
 
 
 class RagService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, user_id: UUID | None = None) -> None:
         self.session = session
+        self.user_id = user_id
         self.model_gateway = ModelGateway()
 
     async def index_text(self, payload: KnowledgeDocumentCreate) -> KnowledgeDocument:
         document = KnowledgeDocument(
             conversation_id=payload.conversation_id,
+            user_id=payload.user_id or self.user_id,
             title=payload.title,
             source_type=payload.source_type,
             source_uri=payload.source_uri,
@@ -172,6 +177,8 @@ class RagService:
         ]
 
     def _scope_statement(self, statement, conversation_id: UUID | None, include_global: bool):
+        if self.user_id is not None:
+            statement = statement.where(KnowledgeDocument.user_id == self.user_id)
         if conversation_id is None:
             return statement.where(KnowledgeDocument.conversation_id.is_(None))
         if not include_global:
@@ -213,6 +220,7 @@ class RagService:
             chunk_index=chunk.chunk_index,
             content=chunk.content,
             source_type=document.source_type,
+            source_uri=document.source_uri,
             score=score,
             retrieval_method=retrieval_method,
         )

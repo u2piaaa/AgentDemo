@@ -12,6 +12,9 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class KnowledgeDocument(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "knowledge_documents"
 
+    user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     conversation_id: Mapped[UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), index=True
     )
