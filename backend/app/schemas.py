@@ -55,6 +55,15 @@ class ChatRequest(BaseModel):
     task_type: str = "conversation"
 
 
+class ToolConfirmationRequest(BaseModel):
+    conversation_id: UUID
+    message: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    reason: str = "Confirmed by the user."
+    task_type: str = "conversation"
+
+
 class ChatEvent(BaseModel):
     type: str
     data: dict[str, Any]
@@ -73,6 +82,7 @@ class AgentExecutionState(BaseModel):
     conversation_id: UUID | None = None
     message: str
     history: list[dict[str, str]] = Field(default_factory=list)
+    memory_summaries: list[str] = Field(default_factory=list)
     citations: list[dict[str, Any]] = Field(default_factory=list)
     plan: AgentToolPlan = Field(default_factory=AgentToolPlan)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)

@@ -70,6 +70,35 @@ class ModelGateway:
             data = response.json()["data"]
         return [item["embedding"] for item in sorted(data, key=lambda item: item["index"])]
 
+    async def summarize_messages(
+        self,
+        messages: list[dict[str, str]],
+        existing_summary: str | None = None,
+    ) -> str:
+        if not messages:
+            return existing_summary or ""
+        transcript = "\n".join(
+            f"{item['role']}: {item['content']}"
+            for item in messages
+            if item.get("role") in {"user", "assistant"} and item.get("content")
+        )
+        prompt = (
+            "Summarize this conversation for future memory. Keep durable user preferences, "
+            "project facts, decisions, and unresolved tasks. Do not include transient filler."
+        )
+        context = [f"Existing memory summary:\n{existing_summary}"] if existing_summary else []
+        context.append(f"Conversation transcript:\n{transcript}")
+        route = self.route("memory_summary", prompt)
+        parts: list[str] = []
+        async for token in self.stream_reply(
+            model_name=route.model_name,
+            prompt=prompt,
+            context=context,
+            history=[],
+        ):
+            parts.append(token)
+        return "".join(parts).strip()
+
     def _build_messages(
         self,
         prompt: str,
