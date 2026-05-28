@@ -1,13 +1,18 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routes.auth import CurrentUser
 from app.db.database import get_session
 from app.models.conversation import Conversation
-from app.models.task import Task
+from app.models.task import (
+    TASK_STATUS_CANCELLED,
+    TASK_STATUS_QUEUED,
+    Task,
+    is_valid_task_status_transition,
+)
 from app.schemas import TaskCreate, TaskRead, TaskUpdate
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -16,10 +21,17 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 @router.get("", response_model=list[TaskRead])
 async def list_tasks(
     current_user: CurrentUser,
+    conversation_id: UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> list[Task]:
+    statement = select(Task).where(Task.user_id == current_user.id)
+    if conversation_id is not None:
+        conversation = await get_owned_conversation(session, conversation_id, current_user.id)
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        statement = statement.where(Task.conversation_id == conversation_id)
     result = await session.execute(
-        select(Task).where(Task.user_id == current_user.id).order_by(Task.created_at.desc())
+        statement.order_by(Task.created_at.desc())
     )
     return list(result.scalars().all())
 
@@ -41,8 +53,9 @@ async def create_task(
         name=payload.name,
         user_id=current_user.id,
         conversation_id=payload.conversation_id,
-        status="queued",
+        status=TASK_STATUS_QUEUED,
         progress=0,
+        trace_id=payload.trace_id,
         metadata_=payload.metadata,
     )
     session.add(task)
@@ -74,6 +87,7 @@ async def update_task(
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     if payload.status is not None:
+        validate_task_transition(task, payload.status)
         task.status = payload.status
     if payload.progress is not None:
         task.progress = payload.progress
@@ -81,8 +95,26 @@ async def update_task(
         task.error = payload.error
     if payload.result is not None:
         task.result = payload.result
+    if payload.trace_id is not None:
+        task.trace_id = payload.trace_id
     if payload.metadata is not None:
         task.metadata_ = payload.metadata
+    await session.commit()
+    await session.refresh(task)
+    return task
+
+
+@router.post("/{task_id}/cancel", response_model=TaskRead)
+async def cancel_task(
+    task_id: UUID,
+    current_user: CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> Task:
+    task = await get_owned_task(session, task_id, current_user.id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    validate_task_transition(task, TASK_STATUS_CANCELLED)
+    task.status = TASK_STATUS_CANCELLED
     await session.commit()
     await session.refresh(task)
     return task
@@ -98,6 +130,15 @@ async def get_owned_conversation(
         )
     )
     return result.scalar_one_or_none()
+
+
+def validate_task_transition(task: Task, next_status: str) -> None:
+    if is_valid_task_status_transition(task.status, next_status):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=f"Invalid task status transition from {task.status} to {next_status}",
+    )
 
 
 async def get_owned_task(session: AsyncSession, task_id: UUID, user_id: UUID) -> Task | None:
