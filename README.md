@@ -48,8 +48,10 @@ At a high level the runtime does this for each user message:
 6. Plan whether a tool is needed.
 7. Execute up to the configured tool round limit.
 8. Stream the model response token by token.
-9. Persist the assistant response with citations, tool calls, trace id, and model
-   route metadata.
+9. Persist the assistant response with citations, tool calls, memory summaries,
+   trace id, and model route metadata.
+10. Refresh the active long-term memory summary when the conversation has grown
+    past the configured recent-history window.
 
 The initial planner is intentionally small and deterministic. It detects local
 file-reading requests and dispatches the `read_file` plugin when appropriate.
@@ -82,8 +84,12 @@ The direct tool endpoint is `POST /api/tools/{tool_name}/run` with:
 }
 ```
 
-The chat runtime currently passes `confirmed=false` for tools that require
-confirmation, so those calls are surfaced as blocked. See "Known Limitations".
+The chat runtime first blocks tools that require confirmation and audits that
+blocked attempt. When the user confirms in the frontend, it calls
+`POST /api/conversations/chat/confirm/stream` with the original message, tool
+name, and arguments. The runtime then executes the confirmed tool, streams a new
+`tool_call` / `tool_result` / `token` sequence, and persists the continuation
+assistant message.
 
 ## SSE Events
 
@@ -146,8 +152,11 @@ Conversation memory has two layers:
   `AgentRuntime._load_recent_history`.
 - Long-term memory summaries have API support under `/api/memory/summaries` for
   listing, reading, disabling, and deleting summaries owned through their
-  conversation. Runtime generation and automatic injection of those summaries is
-  still a follow-up item unless a later branch wires it in.
+  conversation.
+- `AgentRuntime` injects active memory summaries into model context and refreshes
+  the active summary after long conversations. Summary generation is best-effort:
+  if model credentials are missing or the provider fails, the chat response still
+  succeeds and memory refresh is skipped for that turn.
 
 ## Local Setup
 
@@ -269,12 +278,6 @@ handoff checklist.
 
 ## Known Limitations
 
-- The backend does not yet expose a continue-after-confirmation API for blocked
-  tool calls in the chat stream. The frontend shows the confirmation state but
-  cannot resume the same stream yet.
-- Memory summary records and management routes exist, but automatic runtime
-  summary generation and injection should be treated as postponed unless a later
-  implementation explicitly wires them in.
 - Current frontend dependency audit reports 2 moderate vulnerabilities in
   existing dependencies.
 - Repository private status cannot be verified from local agent work alone; check

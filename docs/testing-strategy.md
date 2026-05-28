@@ -36,7 +36,9 @@ Backend coverage priorities:
 - Tool executor validates arguments, enforces confirmation, caps output, records
   audit summaries, and returns stable error shapes.
 - Agent runtime emits SSE events in order, persists trace metadata, uses recent
-  history, and includes tool observations and RAG citations in model context.
+  history, confirms blocked tools through the continuation stream, generates
+  memory summaries for long conversations, and includes memory summaries, tool
+  observations, and RAG citations in model context.
 - RAG search works with vector results, keyword fallback, and conversation
   document prioritization.
 
@@ -69,6 +71,7 @@ Most tests should not call external models.
 Use the existing patterns:
 
 - Inject a fake gateway with `route()` and `stream_reply()` into `AgentRuntime`.
+  Add `summarize_messages()` when testing memory refresh behavior.
 - Inject a fake RAG service with `search()`.
 - Use fake sessions that implement only the async methods the unit under test
   needs.

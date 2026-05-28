@@ -5,8 +5,8 @@ from uuid import uuid4
 import pytest
 
 from app.agent.runtime import AgentRuntime
-from app.models.conversation import Conversation, Message
-from app.schemas import AgentToolPlan, ChatRequest
+from app.models.conversation import Conversation, MemorySummary, Message
+from app.schemas import AgentToolPlan, ChatRequest, ToolConfirmationRequest
 from app.services.model_gateway import ModelRoute
 from app.services.plugin_registry import PluginManifest, RegisteredTool
 
@@ -38,7 +38,6 @@ class FakeSession:
         for item in self.items:
             if isinstance(item, Conversation) and item.id is None:
                 item.id = uuid4()
-        return None
 
     async def commit(self) -> None:
         self.commit_count += 1
@@ -55,6 +54,7 @@ class FakeRag:
 class FakeGateway:
     def __init__(self) -> None:
         self.stream_calls = []
+        self.summary_calls = []
 
     def route(self, task_type: str, prompt: str) -> ModelRoute:
         return ModelRoute(model_name="fake-chat", provider="fake", reason=f"fake_{task_type}")
@@ -84,6 +84,12 @@ class FakeGateway:
         for token in text.split(" "):
             yield token + " "
 
+    async def summarize_messages(self, messages, existing_summary=None):
+        self.summary_calls.append(
+            {"messages": messages, "existing_summary": existing_summary}
+        )
+        return "The user prefers concise project notes."
+
 
 class FakeRegistry:
     def __init__(self, tool: RegisteredTool | None) -> None:
@@ -95,12 +101,12 @@ class FakeRegistry:
         return None
 
 
-def make_read_file_tool(handler) -> RegisteredTool:
+def make_read_file_tool(handler, requires_confirmation: bool = False) -> RegisteredTool:
     manifest = PluginManifest(
         name="read_file",
         description="Read a file.",
         permission="filesystem_read",
-        requires_confirmation=False,
+        requires_confirmation=requires_confirmation,
         parameters={
             "type": "object",
             "required": ["path"],
@@ -230,6 +236,104 @@ async def test_assistant_metadata_persists_trace_tool_calls_and_route() -> None:
         "provider": "fake",
         "reason": "fake_conversation",
     }
+
+
+@pytest.mark.asyncio
+async def test_confirmed_tool_stream_executes_blocked_tool() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(
+            make_read_file_tool(successful_read_file, requires_confirmation=True)
+        ),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    blocked_events = await collect_events(runtime, "读取 README.md 并总结")
+    blocked_result = next(data for name, data in blocked_events if name == "tool_result")
+    assert blocked_result["status"] == "failed"
+    assert blocked_result["error"] == "Tool requires confirmation before execution"
+
+    conversation_id = next(item.id for item in session.items if isinstance(item, Conversation))
+    confirmed_events = []
+    async for event in runtime.stream_confirmed_tool(
+        ToolConfirmationRequest(
+            conversation_id=conversation_id,
+            message="读取 README.md 并总结",
+            tool_name="read_file",
+            arguments={"path": "README.md"},
+            reason="User confirmed the file read.",
+        )
+    ):
+        confirmed_events.append((event["event"], json.loads(event["data"])))
+
+    confirmed_result = next(data for name, data in confirmed_events if name == "tool_result")
+    assert confirmed_result["status"] == "success"
+    assert "AgentDemo" in "\n".join(gateway.stream_calls[-1]["context"])
+
+
+class MemoryContextRuntime(AgentRuntime):
+    async def _load_active_memory_summaries(self, conversation_id):
+        return ["The user prefers terse implementation notes."]
+
+    async def _maybe_update_memory_summary(self, conversation_id):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_runtime_loads_memory_summaries_into_answer_context() -> None:
+    gateway = FakeGateway()
+    runtime = MemoryContextRuntime(
+        session=FakeSession(),
+        plugin_registry=None,
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    await collect_events(runtime, "What should you remember?")
+
+    assert gateway.stream_calls[0]["context"] == [
+        "Memory summary:\nThe user prefers terse implementation notes."
+    ]
+
+
+class SummarySession(FakeSession):
+    def __init__(self, messages: list[Message], summaries: list[MemorySummary] | None = None):
+        super().__init__(history=[])
+        self.messages = messages
+        self.summaries = summaries or []
+
+    async def execute(self, statement):
+        text = str(statement)
+        if "memory_summaries" in text:
+            return ScalarResult(self.summaries)
+        return ScalarResult(self.messages)
+
+
+@pytest.mark.asyncio
+async def test_runtime_generates_memory_summary_for_long_conversation() -> None:
+    conversation_id = uuid4()
+    messages = [
+        Message(conversation_id=conversation_id, role="user", content=f"fact {index}")
+        for index in range(4)
+    ]
+    session = SummarySession(messages)
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=None,
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+    runtime.settings.agent_memory_message_limit = 3
+
+    await runtime._maybe_update_memory_summary(conversation_id)
+
+    summaries = [item for item in session.items if isinstance(item, MemorySummary)]
+    assert summaries[0].summary == "The user prefers concise project notes."
+    assert gateway.summary_calls[0]["messages"][0]["content"] == "fact 0"
 
 
 class LoopingRuntime(AgentRuntime):
