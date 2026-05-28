@@ -72,6 +72,9 @@ class ChatEvent(BaseModel):
 class AgentToolPlan(BaseModel):
     no_tool: bool = True
     tool_name: str | None = None
+    provider: str = "local_plugin"
+    provider_tool_id: str | None = None
+    server_name: str | None = None
     arguments: dict[str, Any] = Field(default_factory=dict)
     reason: str = ""
     requires_confirmation: bool = False
@@ -84,6 +87,8 @@ class AgentExecutionState(BaseModel):
     history: list[dict[str, str]] = Field(default_factory=list)
     memory_summaries: list[str] = Field(default_factory=list)
     citations: list[dict[str, Any]] = Field(default_factory=list)
+    mcp_resources: list[dict[str, Any]] = Field(default_factory=list)
+    mcp_prompts: list[dict[str, Any]] = Field(default_factory=list)
     plan: AgentToolPlan = Field(default_factory=AgentToolPlan)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     observations: list[str] = Field(default_factory=list)
@@ -145,6 +150,10 @@ class ToolManifestRead(BaseModel):
     name: str
     description: str
     permission: str
+    provider: str = "local_plugin"
+    provider_tool_id: str | None = None
+    transport: str = "python"
+    server_name: str | None = None
     requires_confirmation: bool = False
     enabled: bool
     parameters: dict[str, Any]
@@ -159,6 +168,9 @@ class ToolRunRequest(BaseModel):
 
 class ToolRunResponse(BaseModel):
     tool_name: str
+    provider: str = "local_plugin"
+    provider_tool_id: str | None = None
+    server_name: str | None = None
     status: str = "success"
     output: Any = None
     output_summary: str | None = None
@@ -171,8 +183,16 @@ class KnowledgeDocumentCreate(BaseModel):
     title: str
     source_type: str = "text"
     source_uri: str | None = None
+    user_id: UUID | None = None
     conversation_id: UUID | None = None
     content: str
+
+
+class McpResourceImportRequest(BaseModel):
+    server_name: str = Field(min_length=1)
+    uri: str = Field(min_length=1)
+    title: str | None = None
+    conversation_id: UUID | None = None
 
 
 class KnowledgeDocumentRead(BaseModel):
@@ -190,6 +210,7 @@ class CitationMetadata(BaseModel):
     document_title: str
     chunk_index: int
     source_type: str
+    source_uri: str | None = None
     score: float
     retrieval_method: str
 
@@ -200,6 +221,7 @@ class CitationRead(BaseModel):
     chunk_index: int
     content: str
     source_type: str
+    source_uri: str | None = None
     score: float
     retrieval_method: str
     metadata: CitationMetadata
