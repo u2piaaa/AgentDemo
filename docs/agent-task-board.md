@@ -25,6 +25,7 @@ This board tracks the executable-agent upgrade across short-lived agent branches
 - 2026-05-28: Merged `agent/docs-qa` into `test` at `93ab2bb`; full `test` regression passed and `origin/test` was pushed.
 - 2026-05-28: Merged `test` into `merge`; full pre-release validation passed on `merge`.
 - 2026-05-28: Follow-up on `test` implemented confirmed tool continuation and runtime memory summary loading/generation in `d9ce8ad`.
+- 2026-05-28: Merged follow-up completion into `merge`; full pre-release validation passed again.
 
 ## Verification Log
 
@@ -40,3 +41,5 @@ This board tracks the executable-agent upgrade across short-lived agent branches
 - Final `test`: `python -m pytest` via backend venv = 70 passed, 1 skipped, 3 warnings; `npm run build` passed; `git diff --check` passed; tracked sensitive/runtime file scan found no matches.
 - `merge`: `python -m pytest` via backend venv = 70 passed, 1 skipped, 3 warnings; `npm run build` passed; `git diff --check` passed; tracked sensitive/runtime file scan found no matches.
 - Follow-up targeted run: runtime/model/tool tests = 28 passed; frontend build passed; `git diff --check` passed.
+- Follow-up `test`: `python -m pytest` via backend venv = 73 passed, 1 skipped, 3 warnings; `npm run build` passed; browser render check passed with no console errors.
+- Follow-up `merge`: `python -m pytest` via backend venv = 73 passed, 1 skipped, 3 warnings; `npm run build` passed; `git diff --check` passed; tracked sensitive/runtime file scan found no matches.
