@@ -55,9 +55,45 @@ class ChatRequest(BaseModel):
     task_type: str = "conversation"
 
 
+class ToolConfirmationRequest(BaseModel):
+    conversation_id: UUID
+    message: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    reason: str = "Confirmed by the user."
+    task_type: str = "conversation"
+
+
 class ChatEvent(BaseModel):
     type: str
     data: dict[str, Any]
+
+
+class AgentToolPlan(BaseModel):
+    no_tool: bool = True
+    tool_name: str | None = None
+    provider: str = "local_plugin"
+    provider_tool_id: str | None = None
+    server_name: str | None = None
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+    requires_confirmation: bool = False
+
+
+class AgentExecutionState(BaseModel):
+    user_id: UUID | None = None
+    conversation_id: UUID | None = None
+    message: str
+    history: list[dict[str, str]] = Field(default_factory=list)
+    memory_summaries: list[str] = Field(default_factory=list)
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    mcp_resources: list[dict[str, Any]] = Field(default_factory=list)
+    mcp_prompts: list[dict[str, Any]] = Field(default_factory=list)
+    plan: AgentToolPlan = Field(default_factory=AgentToolPlan)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    observations: list[str] = Field(default_factory=list)
+    final_answer: str = ""
+    trace_id: str = Field(default_factory=lambda: uuid4().hex)
 
 
 class MessageRead(BaseModel):
@@ -114,6 +150,10 @@ class ToolManifestRead(BaseModel):
     name: str
     description: str
     permission: str
+    provider: str = "local_plugin"
+    provider_tool_id: str | None = None
+    transport: str = "python"
+    server_name: str | None = None
     requires_confirmation: bool = False
     enabled: bool
     parameters: dict[str, Any]
@@ -128,6 +168,9 @@ class ToolRunRequest(BaseModel):
 
 class ToolRunResponse(BaseModel):
     tool_name: str
+    provider: str = "local_plugin"
+    provider_tool_id: str | None = None
+    server_name: str | None = None
     status: str = "success"
     output: Any = None
     output_summary: str | None = None
@@ -153,3 +196,35 @@ class KnowledgeDocumentRead(BaseModel):
     source_type: str
     status: str
     created_at: datetime
+
+
+class CitationMetadata(BaseModel):
+    document_title: str
+    chunk_index: int
+    source_type: str
+    score: float
+    retrieval_method: str
+
+
+class CitationRead(BaseModel):
+    document_id: UUID
+    title: str
+    chunk_index: int
+    content: str
+    source_type: str
+    score: float
+    retrieval_method: str
+    metadata: CitationMetadata
+
+
+class MemorySummaryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    conversation_id: UUID
+    summary: str
+    valid_from: datetime | None
+    valid_to: datetime | None
+    disabled: bool
+    created_at: datetime
+    updated_at: datetime

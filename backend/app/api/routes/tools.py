@@ -9,7 +9,7 @@ router = APIRouter(prefix="/tools", tags=["tools"])
 
 @router.get("", response_model=list[ToolManifestRead])
 async def list_tools(request: Request, current_user: CurrentUser) -> list[ToolManifestRead]:
-    registry = request.app.state.plugin_registry
+    registry = request.app.state.tool_registry
     return [tool.to_read_model() for tool in registry.list_tools()]
 
 
@@ -20,8 +20,13 @@ async def run_tool(
     request: Request,
     current_user: CurrentUser,
 ) -> ToolRunResponse:
-    registry = request.app.state.plugin_registry
+    registry = request.app.state.tool_registry
     tool = registry.get(tool_name)
     if tool is None or not tool.manifest.enabled:
         raise HTTPException(status_code=404, detail="Tool not found")
-    return await ToolExecutor().run(tool, payload.arguments)
+    return await ToolExecutor().run(
+        tool,
+        payload.arguments,
+        confirmed=payload.confirmed,
+        user_id=current_user.id,
+    )
