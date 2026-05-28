@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import {
   cancelTask,
+  checkAccessToken,
+  clearAccessToken,
   clearAuthToken,
   createConversation,
   deleteConversation,
@@ -37,6 +39,7 @@ import {
   getTools,
   login,
   register,
+  setAccessToken,
   setAuthToken,
   streamChat,
   streamConfirmedTool,
@@ -248,6 +251,10 @@ export function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [citations, setCitations] = useState<Citation[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [accessRequired, setAccessRequired] = useState(false);
+  const [hasAccess, setHasAccess] = useState(false);
+  const [accessTokenInput, setAccessTokenInput] = useState("");
+  const [accessError, setAccessError] = useState("");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -272,10 +279,30 @@ export function App() {
 
   useEffect(() => {
     getAuthStatus()
-      .then(() => getCurrentUser())
-      .then(setCurrentUser)
+      .then(async (accessStatus) => {
+        setAccessRequired(accessStatus.required);
+        if (accessStatus.required) {
+          const isAllowed = await checkAccessToken();
+          if (!isAllowed) {
+            clearAccessToken();
+            clearAuthToken();
+            setHasAccess(false);
+            setCurrentUser(null);
+            return;
+          }
+        }
+        setHasAccess(true);
+        try {
+          setCurrentUser(await getCurrentUser());
+        } catch {
+          clearAuthToken();
+          setCurrentUser(null);
+        }
+      })
       .catch(() => {
+        clearAccessToken();
         clearAuthToken();
+        setHasAccess(false);
         setCurrentUser(null);
       })
       .finally(() => setIsCheckingAuth(false));
@@ -403,6 +430,34 @@ export function App() {
   function handleSelectConversation(conversationId: string) {
     setActiveConversationId(conversationId);
     setIsSidebarOpen(false);
+  }
+
+  async function handleAccessSubmit(event: FormEvent) {
+    event.preventDefault();
+    const token = accessTokenInput.trim();
+    if (!token) return;
+    setAccessError("");
+
+    try {
+      const isAllowed = await checkAccessToken(token);
+      if (!isAllowed) {
+        clearAccessToken();
+        setAccessError("Invalid access token");
+        return;
+      }
+      setAccessToken(token);
+      setHasAccess(true);
+      setAccessTokenInput("");
+      try {
+        setCurrentUser(await getCurrentUser());
+      } catch {
+        clearAuthToken();
+        setCurrentUser(null);
+      }
+    } catch (error) {
+      clearAccessToken();
+      setAccessError(error instanceof Error ? error.message : "Invalid access token");
+    }
   }
 
   async function handleAuthSubmit(event: FormEvent) {
@@ -853,6 +908,31 @@ export function App() {
           <h1>Personal Agent</h1>
           <p className="muted">Checking session...</p>
         </div>
+      </main>
+    );
+  }
+
+  if (accessRequired && !hasAccess) {
+    return (
+      <main className="auth-screen">
+        <form className="auth-panel" onSubmit={handleAccessSubmit}>
+          <Bot size={32} aria-hidden="true" />
+          <h1>Personal Agent</h1>
+          <p className="muted">Enter the project access token.</p>
+          <label htmlFor="access-token">Access token</label>
+          <input
+            id="access-token"
+            type="password"
+            value={accessTokenInput}
+            onChange={(event) => setAccessTokenInput(event.target.value)}
+            autoComplete="current-password"
+          />
+          {accessError ? <p className="auth-error">{accessError}</p> : null}
+          <button className="primary-action">
+            <LogIn size={18} aria-hidden="true" />
+            Continue
+          </button>
+        </form>
       </main>
     );
   }
