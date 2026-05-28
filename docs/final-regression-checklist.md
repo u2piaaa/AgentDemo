@@ -1,0 +1,126 @@
+# Final Regression Checklist
+
+Use this checklist before merging tested work into `run` and pushing release
+branches. Record command results in the handoff notes.
+
+## Branch And Status
+
+- Confirm development happened on the intended feature branch or worktree.
+- Confirm `test` contains the integrated feature set being released.
+- Confirm `run` is not modified until final merge verification is complete.
+- Run:
+
+```powershell
+git status --short --branch
+git log -1 --oneline
+```
+
+Expected: clean or intentionally documented local changes only.
+
+## Backend
+
+Run migrations against the local development database:
+
+```powershell
+cd D:\workplace\AgentDemo\backend
+.\.venv\Scripts\alembic.exe upgrade head
+```
+
+Run backend tests:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+Minimum targeted fallback if time is tight:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_access_token_middleware.py tests/test_tool_routes.py tests/test_task_routes.py tests/test_plugin_registry.py tests/test_tool_executor.py tests/test_agent_runtime.py tests/test_rag.py tests/test_memory_routes.py
+```
+
+Expected: tests pass. Live model tests may skip when API keys are absent.
+
+## Frontend
+
+Install from lockfile and build:
+
+```powershell
+cd D:\workplace\AgentDemo\frontend
+npm ci
+npm run build
+```
+
+Run audit and record the current result:
+
+```powershell
+npm audit
+```
+
+Known current note: `npm audit` reports 2 moderate vulnerabilities in existing
+dependencies.
+
+## Git Hygiene
+
+Run from repository root:
+
+```powershell
+cd D:\workplace\AgentDemo
+git diff --check
+git status --short
+git status --ignored --short
+```
+
+Review `.gitignore` still excludes:
+
+- `.env`
+- `.venv/`
+- `.local/`
+- `downloads/`
+- `node_modules/`
+- `dist/`
+- logs and Python cache/build outputs
+
+## Sensitive File Check
+
+Before pushing, inspect tracked files and pending changes for obvious secrets or
+runtime data:
+
+```powershell
+git ls-files | Select-String -Pattern '\.env$|\.local|downloads|node_modules|dist|\.venv|\.log$'
+git diff --cached --name-only
+git diff --cached --check
+git diff --cached | Select-String -Pattern 'api[_-]?key|secret|token|password|BEGIN (RSA|OPENSSH|PRIVATE) KEY' -CaseSensitive:$false
+```
+
+Expected: no tracked runtime data, downloaded binaries, dependency folders,
+logs, build outputs, private keys, or real credentials. Example env files may
+contain empty placeholders only.
+
+## Manual Acceptance
+
+With backend and frontend running:
+
+1. Open `http://localhost:5173`.
+2. Register or log in with a local account and access token as configured.
+3. Start a new chat and verify streaming tokens appear.
+4. Ask a normal question and verify no tool is required.
+5. Ask to read or summarize `README.md` and verify `plan`, `tool_call`,
+   `tool_result`, and final answer are shown.
+6. Upload a TXT or Markdown document and verify citations appear when asking
+   about its content.
+7. Create or view tasks for the active conversation and verify polling updates
+   the task panel.
+8. Cancel a cancellable task and verify it becomes `cancelled`.
+9. Restart the backend with a manually created `running` task and verify startup
+   recovery marks it `stale`.
+10. Confirm a tool requiring confirmation is shown as blocked. The backend does
+    not yet support continuing the same chat stream after confirmation.
+
+## Known Release Notes
+
+- Backend lacks a continue-after-confirmation API for chat-stream tool calls.
+- Memory summary routes exist, but runtime auto-generation and injection remain a
+  postponed or risky area unless a later implementation wires them in.
+- `npm audit` currently reports 2 moderate vulnerabilities.
+- Repository private status cannot be verified by the local agent. Confirm it in
+  GitHub repository settings.
