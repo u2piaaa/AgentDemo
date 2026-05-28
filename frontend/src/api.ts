@@ -3,6 +3,9 @@ import type {
   Conversation,
   KnowledgeDocument,
   Message,
+  McpPrompt,
+  McpResource,
+  McpServer,
   StreamEvent,
   Task,
   ToolCallData,
@@ -109,6 +112,24 @@ export async function getMessages(conversationId: string): Promise<Message[]> {
 export async function getTools(): Promise<ToolManifest[]> {
   const response = await fetch("/api/tools", { headers: authHeaders() });
   if (!response.ok) throw new Error(await readError(response, "Failed to load tools"));
+  return response.json();
+}
+
+export async function getMcpServers(): Promise<McpServer[]> {
+  const response = await fetch("/api/mcp/servers", { headers: authHeaders() });
+  if (!response.ok) throw new Error(await readError(response, "Failed to load MCP servers"));
+  return response.json();
+}
+
+export async function getMcpResources(): Promise<McpResource[]> {
+  const response = await fetch("/api/mcp/resources", { headers: authHeaders() });
+  if (!response.ok) throw new Error(await readError(response, "Failed to load MCP resources"));
+  return response.json();
+}
+
+export async function getMcpPrompts(): Promise<McpPrompt[]> {
+  const response = await fetch("/api/mcp/prompts", { headers: authHeaders() });
+  if (!response.ok) throw new Error(await readError(response, "Failed to load MCP prompts"));
   return response.json();
 }
 
@@ -317,6 +338,9 @@ function toStreamEvent(eventName: string, data: unknown): StreamEvent[] {
         data: {
           no_tool: Boolean(data.no_tool),
           tool_name: stringOrNull(data.tool_name),
+          provider: stringOrUndefined(data.provider),
+          provider_tool_id: stringOrNull(data.provider_tool_id),
+          server_name: stringOrNull(data.server_name),
           arguments: recordOrEmpty(data.arguments),
           reason: typeof data.reason === "string" ? data.reason : "",
           requires_confirmation: Boolean(data.requires_confirmation)
@@ -349,6 +373,8 @@ function toStreamEvent(eventName: string, data: unknown): StreamEvent[] {
           conversation_id: data.conversation_id,
           citations: Array.isArray(data.citations) ? data.citations : [],
           tool_calls: Array.isArray(data.tool_calls) ? data.tool_calls : undefined,
+          mcp_resources: Array.isArray(data.mcp_resources) ? (data.mcp_resources as McpResource[]) : undefined,
+          mcp_prompts: Array.isArray(data.mcp_prompts) ? (data.mcp_prompts as McpPrompt[]) : undefined,
           trace_id: stringOrUndefined(data.trace_id),
           model_route: isRecord(data.model_route) ? data.model_route : undefined
         }
