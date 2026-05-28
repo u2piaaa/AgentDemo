@@ -1,9 +1,12 @@
+import asyncio
 from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app import main
+from app.api.routes import auth
+from app.core.config import get_settings
 from app.main import AccessTokenMiddleware
 
 
@@ -59,3 +62,19 @@ def test_access_token_middleware_allows_valid_access_token(monkeypatch) -> None:
     response = client.get("/api/protected", headers={"x-agent-access-token": "secret"})
 
     assert response.status_code == 200
+
+
+def test_auth_status_reports_access_token_required(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_ACCESS_TOKEN", "secret")
+    get_settings.cache_clear()
+
+    assert asyncio.run(auth.auth_status()) == {"required": True}
+    get_settings.cache_clear()
+
+
+def test_auth_status_reports_access_token_not_required(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_ACCESS_TOKEN", "")
+    get_settings.cache_clear()
+
+    assert asyncio.run(auth.auth_status()) == {"required": False}
+    get_settings.cache_clear()
