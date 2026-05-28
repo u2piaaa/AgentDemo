@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   BookOpen,
@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import {
   cancelTask,
+  checkAccessToken,
+  clearAccessToken,
   clearAuthToken,
   createConversation,
   deleteConversation,
@@ -37,6 +39,7 @@ import {
   getTools,
   login,
   register,
+  setAccessToken,
   setAuthToken,
   streamChat,
   streamConfirmedTool,
@@ -56,7 +59,11 @@ import type {
   User
 } from "./types";
 
-type DraftMessage = Pick<Message, "role" | "content"> & { id: string; metadata?: Record<string, unknown> };
+type DraftMessage = Pick<Message, "role" | "content"> & {
+  id: string;
+  metadata?: Record<string, unknown>;
+  metadata_?: Record<string, unknown>;
+};
 type ToolStatus = "running" | "success" | "failed" | "timeout" | "blocked" | "cancelled";
 type ConfirmationDecision = "pending" | "confirmed" | "cancelled";
 
@@ -74,10 +81,15 @@ type ToolTrace = {
 };
 
 type ExecutionTrace = {
+  statuses?: string[];
   plans: AgentPlanData[];
   toolCalls: ToolTrace[];
   error?: string;
 };
+
+function createExecutionTrace(): ExecutionTrace {
+  return { statuses: [], plans: [], toolCalls: [] };
+}
 
 function makeClientId(prefix: string) {
   try {
@@ -96,7 +108,7 @@ function extractLatestCitations(messages: DraftMessage[]): Citation[] {
     if (message.role !== "assistant") {
       continue;
     }
-    const citations = message.metadata?.citations;
+    const citations = messageMetadata(message)?.citations;
     if (Array.isArray(citations)) {
       return citations.filter(isCitation);
     }
@@ -119,6 +131,18 @@ function isCitation(value: unknown): value is Citation {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function messageMetadata(message: DraftMessage): Record<string, unknown> | undefined {
+  return message.metadata ?? message.metadata_;
+}
+
+function appendTraceStatus(statuses: string[] | undefined, label: string): string[] {
+  const current = statuses ?? [];
+  if (current[current.length - 1] === label) {
+    return current;
+  }
+  return [...current, label].slice(-8);
 }
 
 function summarizeValue(value: unknown, fallback = "No data"): string {
@@ -187,13 +211,59 @@ function normalizePersistedToolCalls(raw: unknown): ToolTrace[] {
   });
 }
 
+function normalizePersistedPlans(raw: unknown): AgentPlanData[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.flatMap((item) => {
+    if (!isRecord(item) || typeof item.tool_name !== "string") {
+      return [];
+    }
+    return [
+      {
+        no_tool: false,
+        tool_name: item.tool_name,
+        arguments: isRecord(item.arguments) ? item.arguments : {},
+        reason: typeof item.reason === "string" ? item.reason : `Use ${item.tool_name}`,
+        requires_confirmation: Boolean(item.requires_confirmation)
+      }
+    ];
+  });
+}
+
 function isConfirmationBlock(item: Record<string, unknown>, result: Record<string, unknown> | undefined) {
   return Boolean(item.requires_confirmation) && result?.error === "Tool requires confirmation before execution";
 }
 
 function traceFromMessage(message: DraftMessage): ExecutionTrace | null {
-  const toolCalls = normalizePersistedToolCalls(message.metadata?.tool_calls);
-  return toolCalls.length ? { plans: [], toolCalls } : null;
+  const metadata = messageMetadata(message);
+  const toolCalls = normalizePersistedToolCalls(metadata?.tool_calls);
+  const plans = normalizePersistedPlans(metadata?.tool_calls);
+  return toolCalls.length || plans.length ? { statuses: [], plans, toolCalls } : null;
+}
+
+function hasVisibleTraceSteps(trace: ExecutionTrace | undefined): trace is ExecutionTrace {
+  return Boolean(trace?.statuses?.length || trace?.plans.length || trace?.toolCalls.length || trace?.error);
+}
+
+function traceFromDoneEvent(data: Extract<StreamEvent, { event: "done" }>["data"]): ExecutionTrace {
+  const toolCalls = normalizePersistedToolCalls(data.tool_calls);
+  const plans = normalizePersistedPlans(data.tool_calls);
+  return {
+    statuses: ["Done"],
+    plans: plans.length
+      ? plans
+      : [
+          {
+            no_tool: true,
+            tool_name: null,
+            arguments: {},
+            reason: "No tool call was used for this response.",
+            requires_confirmation: false
+          }
+        ],
+    toolCalls
+  };
 }
 
 function mergeToolResult(toolCalls: ToolTrace[], result: ToolResultData): ToolTrace[] {
@@ -248,6 +318,10 @@ export function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [citations, setCitations] = useState<Citation[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [accessRequired, setAccessRequired] = useState(false);
+  const [hasAccess, setHasAccess] = useState(false);
+  const [accessTokenInput, setAccessTokenInput] = useState("");
+  const [accessError, setAccessError] = useState("");
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -267,15 +341,36 @@ export function App() {
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const [executionTraces, setExecutionTraces] = useState<Record<string, ExecutionTrace>>({});
   const [confirmationDecisions, setConfirmationDecisions] = useState<Record<string, ConfirmationDecision>>({});
+  const executionTraceRef = useRef<Record<string, ExecutionTrace>>({});
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     getAuthStatus()
-      .then(() => getCurrentUser())
-      .then(setCurrentUser)
+      .then(async (accessStatus) => {
+        setAccessRequired(accessStatus.required);
+        if (accessStatus.required) {
+          const isAllowed = await checkAccessToken();
+          if (!isAllowed) {
+            clearAccessToken();
+            clearAuthToken();
+            setHasAccess(false);
+            setCurrentUser(null);
+            return;
+          }
+        }
+        setHasAccess(true);
+        try {
+          setCurrentUser(await getCurrentUser());
+        } catch {
+          clearAuthToken();
+          setCurrentUser(null);
+        }
+      })
       .catch(() => {
+        clearAccessToken();
         clearAuthToken();
+        setHasAccess(false);
         setCurrentUser(null);
       })
       .finally(() => setIsCheckingAuth(false));
@@ -298,6 +393,7 @@ export function App() {
       setDocuments([]);
       setCitations([]);
       setTasks([]);
+      executionTraceRef.current = {};
       setExecutionTraces({});
       setConfirmationDecisions({});
       setUploadStatus("No document uploaded in this chat.");
@@ -310,7 +406,14 @@ export function App() {
       ([loadedMessages, loadedDocuments]) => {
         setMessages(loadedMessages);
         setDocuments(loadedDocuments);
-        setExecutionTraces({});
+        const filteredTraces = (() => {
+          const messageIds = new Set(loadedMessages.map((message) => message.id));
+          return Object.fromEntries(
+            Object.entries(executionTraceRef.current).filter(([messageId]) => messageIds.has(messageId))
+          );
+        })();
+        executionTraceRef.current = filteredTraces;
+        setExecutionTraces(filteredTraces);
         setConfirmationDecisions({});
         setUploadStatus(
           loadedDocuments.length
@@ -321,6 +424,21 @@ export function App() {
       }
     );
   }, [activeConversationId, isStreaming]);
+
+  function updateExecutionTrace(
+    assistantMessageId: string,
+    updater: (trace: ExecutionTrace) => ExecutionTrace
+  ) {
+    const nextTrace = updater(executionTraceRef.current[assistantMessageId] ?? createExecutionTrace());
+    executionTraceRef.current = {
+      ...executionTraceRef.current,
+      [assistantMessageId]: nextTrace
+    };
+    setExecutionTraces((current) => ({
+      ...current,
+      [assistantMessageId]: nextTrace
+    }));
+  }
 
   useEffect(() => {
     const list = messageListRef.current;
@@ -394,6 +512,7 @@ export function App() {
     setCitations([]);
     setDocuments([]);
     setTasks([]);
+    executionTraceRef.current = {};
     setExecutionTraces({});
     setConfirmationDecisions({});
     setUploadStatus("No document uploaded in this chat.");
@@ -403,6 +522,34 @@ export function App() {
   function handleSelectConversation(conversationId: string) {
     setActiveConversationId(conversationId);
     setIsSidebarOpen(false);
+  }
+
+  async function handleAccessSubmit(event: FormEvent) {
+    event.preventDefault();
+    const token = accessTokenInput.trim();
+    if (!token) return;
+    setAccessError("");
+
+    try {
+      const isAllowed = await checkAccessToken(token);
+      if (!isAllowed) {
+        clearAccessToken();
+        setAccessError("Invalid access token");
+        return;
+      }
+      setAccessToken(token);
+      setHasAccess(true);
+      setAccessTokenInput("");
+      try {
+        setCurrentUser(await getCurrentUser());
+      } catch {
+        clearAuthToken();
+        setCurrentUser(null);
+      }
+    } catch (error) {
+      clearAccessToken();
+      setAccessError(error instanceof Error ? error.message : "Invalid access token");
+    }
   }
 
   async function handleAuthSubmit(event: FormEvent) {
@@ -436,6 +583,7 @@ export function App() {
     setTasks([]);
     setTaskError("");
     setCitations([]);
+    executionTraceRef.current = {};
     setExecutionTraces({});
     setConfirmationDecisions({});
     setStatus("Idle");
@@ -504,6 +652,7 @@ export function App() {
           )
         };
       }
+      executionTraceRef.current = next;
       return next;
     });
   }
@@ -530,10 +679,9 @@ export function App() {
     setConfirmationDecisions((current) => ({ ...current, [tool.id]: "confirmed" }));
     setIsStreaming(true);
     setStatus(`Continuing ${tool.tool_name}`);
-    setExecutionTraces((current) => ({
-      ...current,
-      [assistantMessageId]: { plans: [], toolCalls: [] }
-    }));
+    const initialTrace = createExecutionTrace();
+    executionTraceRef.current = { ...executionTraceRef.current, [assistantMessageId]: initialTrace };
+    setExecutionTraces((current) => ({ ...current, [assistantMessageId]: initialTrace }));
     setMessages((current) => [
       ...current,
       { id: assistantMessageId, role: "assistant", content: "" }
@@ -553,10 +701,7 @@ export function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to continue tool call";
       setStatus(message);
-      setExecutionTraces((current) => {
-        const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
-        return { ...current, [assistantMessageId]: { ...trace, error: message } };
-      });
+      updateExecutionTrace(assistantMessageId, (trace) => ({ ...trace, error: message }));
       setMessages((current) =>
         current.map((item) =>
           item.id === assistantMessageId && !item.content
@@ -571,63 +716,49 @@ export function App() {
 
   function handleRuntimeEvent(assistantMessageId: string, event: StreamEvent) {
     if (event.event === "status") {
-      setStatus(event.data.model ? `${event.data.label}: ${event.data.model}` : event.data.label);
+      const label = event.data.model ? `${event.data.label}: ${event.data.model}` : event.data.label;
+      setStatus(label);
+      updateExecutionTrace(assistantMessageId, (trace) => ({
+        ...trace,
+        statuses: appendTraceStatus(trace.statuses, label)
+      }));
     }
     if (event.event === "plan") {
-      setExecutionTraces((current) => {
-        const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
-        return {
-          ...current,
-          [assistantMessageId]: {
-            ...trace,
-            plans: event.data.no_tool ? trace.plans : [...trace.plans, event.data]
-          }
-        };
-      });
+      updateExecutionTrace(assistantMessageId, (trace) => ({
+        ...trace,
+        plans: [...trace.plans, event.data]
+      }));
     }
     if (event.event === "tool_call") {
-      setExecutionTraces((current) => {
-        const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
+      updateExecutionTrace(assistantMessageId, (trace) => {
         const plan = [...trace.plans].reverse().find((item) => item.tool_name === event.data.tool_name);
         const toolId = `${event.data.trace_id ?? event.data.tool_name}-${trace.toolCalls.length}`;
         return {
-          ...current,
-          [assistantMessageId]: {
-            ...trace,
-            toolCalls: [
-              ...trace.toolCalls,
-              {
-                id: toolId,
-                tool_name: event.data.tool_name,
-                status: plan?.requires_confirmation ? "blocked" : "running",
-                arguments: event.data.arguments,
-                reason: event.data.reason ?? plan?.reason,
-                trace_id: event.data.trace_id,
-                requires_confirmation: event.data.requires_confirmation ?? plan?.requires_confirmation
-              }
-            ]
-          }
+          ...trace,
+          toolCalls: [
+            ...trace.toolCalls,
+            {
+              id: toolId,
+              tool_name: event.data.tool_name,
+              status: plan?.requires_confirmation ? "blocked" : "running",
+              arguments: event.data.arguments,
+              reason: event.data.reason ?? plan?.reason,
+              trace_id: event.data.trace_id,
+              requires_confirmation: event.data.requires_confirmation ?? plan?.requires_confirmation
+            }
+          ]
         };
       });
     }
     if (event.event === "tool_result") {
-      setExecutionTraces((current) => {
-        const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
-        return {
-          ...current,
-          [assistantMessageId]: {
-            ...trace,
-            toolCalls: mergeToolResult(trace.toolCalls, event.data)
-          }
-        };
-      });
+      updateExecutionTrace(assistantMessageId, (trace) => ({
+        ...trace,
+        toolCalls: mergeToolResult(trace.toolCalls, event.data)
+      }));
     }
     if (event.event === "error") {
       setStatus(event.data.message);
-      setExecutionTraces((current) => {
-        const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
-        return { ...current, [assistantMessageId]: { ...trace, error: event.data.message } };
-      });
+      updateExecutionTrace(assistantMessageId, (trace) => ({ ...trace, error: event.data.message }));
     }
     if (event.event === "token") {
       setMessages((current) =>
@@ -647,6 +778,16 @@ export function App() {
         setConversations(items);
         const loadedMessages = await getMessages(conversationId);
         const loadedDocuments = await getDocuments(conversationId);
+        const persistedAssistant = [...loadedMessages].reverse().find((message) => message.role === "assistant");
+        if (persistedAssistant) {
+          const liveTrace = executionTraceRef.current[assistantMessageId];
+          const finalTrace = hasVisibleTraceSteps(liveTrace) ? liveTrace : traceFromDoneEvent(event.data);
+          executionTraceRef.current = {
+            ...executionTraceRef.current,
+            [persistedAssistant.id]: finalTrace
+          };
+          setExecutionTraces((current) => ({ ...current, [persistedAssistant.id]: finalTrace }));
+        }
         setMessages(loadedMessages);
         setDocuments(loadedDocuments);
         void getTasks(conversationId).then(setTasks).catch(() => undefined);
@@ -664,10 +805,9 @@ export function App() {
     setIsStreaming(true);
     setStatus("Starting");
     setCitations([]);
-    setExecutionTraces((current) => ({
-      ...current,
-      [assistantMessageId]: { plans: [], toolCalls: [] }
-    }));
+    const initialTrace = createExecutionTrace();
+    executionTraceRef.current = { ...executionTraceRef.current, [assistantMessageId]: initialTrace };
+    setExecutionTraces((current) => ({ ...current, [assistantMessageId]: initialTrace }));
     setMessages((current) => [
       ...current,
       { id: makeClientId("user"), role: "user", content: text },
@@ -679,10 +819,7 @@ export function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Request failed";
       setStatus(message);
-      setExecutionTraces((current) => {
-        const trace = current[assistantMessageId] ?? { plans: [], toolCalls: [] };
-        return { ...current, [assistantMessageId]: { ...trace, error: message } };
-      });
+      updateExecutionTrace(assistantMessageId, (trace) => ({ ...trace, error: message }));
       setMessages((current) =>
         current.map((item) =>
           item.id === assistantMessageId && !item.content
@@ -692,6 +829,23 @@ export function App() {
       );
     } finally {
       setIsStreaming(false);
+    }
+  }
+
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (
+      event.key !== "Enter" ||
+      event.shiftKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      event.metaKey ||
+      event.nativeEvent.isComposing
+    ) {
+      return;
+    }
+    event.preventDefault();
+    if (!isStreaming && input.trim()) {
+      event.currentTarget.form?.requestSubmit();
     }
   }
 
@@ -709,6 +863,7 @@ export function App() {
         setMessages([]);
         setCitations([]);
         setTasks([]);
+        executionTraceRef.current = {};
         setExecutionTraces({});
         setConfirmationDecisions({});
       }
@@ -728,18 +883,26 @@ export function App() {
 
   function renderExecutionTrace(message: DraftMessage) {
     const trace = executionTraces[message.id] ?? traceFromMessage(message);
-    const hasSteps = Boolean(trace?.toolCalls.length || trace?.plans.length || trace?.error);
-    if (!hasSteps) return null;
+    if (!hasVisibleTraceSteps(trace ?? undefined)) return null;
 
     return (
       <div className="execution-trace" aria-label="Agent execution steps">
+        {trace?.statuses?.map((label, index) => (
+          <div className="execution-step status-step" key={`${label}-${index}`}>
+            <CircleDot size={15} aria-hidden="true" />
+            <div>
+              <strong>Status</strong>
+              <p>{label}</p>
+            </div>
+          </div>
+        ))}
         {trace?.plans.map((plan, index) => (
           <div className="execution-step plan-step" key={`${plan.tool_name ?? "plan"}-${index}`}>
             <ClipboardList size={15} aria-hidden="true" />
             <div>
               <strong>Plan</strong>
               <p>{plan.reason || `Use ${plan.tool_name}`}</p>
-              {plan.tool_name ? <code>{plan.tool_name}</code> : null}
+              {plan.tool_name ? <code>{plan.tool_name}</code> : <code>no tool</code>}
             </div>
           </div>
         ))}
@@ -853,6 +1016,31 @@ export function App() {
           <h1>Personal Agent</h1>
           <p className="muted">Checking session...</p>
         </div>
+      </main>
+    );
+  }
+
+  if (accessRequired && !hasAccess) {
+    return (
+      <main className="auth-screen">
+        <form className="auth-panel" onSubmit={handleAccessSubmit}>
+          <Bot size={32} aria-hidden="true" />
+          <h1>Personal Agent</h1>
+          <p className="muted">Enter the project access token.</p>
+          <label htmlFor="access-token">Access token</label>
+          <input
+            id="access-token"
+            type="password"
+            value={accessTokenInput}
+            onChange={(event) => setAccessTokenInput(event.target.value)}
+            autoComplete="current-password"
+          />
+          {accessError ? <p className="auth-error">{accessError}</p> : null}
+          <button className="primary-action">
+            <LogIn size={18} aria-hidden="true" />
+            Continue
+          </button>
+        </form>
       </main>
     );
   }
@@ -1085,6 +1273,7 @@ export function App() {
                 id="chat-input"
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
+                onKeyDown={handleComposerKeyDown}
                 placeholder="Ask the agent to plan, retrieve, call tools, or summarize."
                 rows={3}
               />

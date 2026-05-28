@@ -16,7 +16,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.get("/status")
 async def auth_status() -> dict[str, bool]:
-    return {"required": True}
+    return {"required": bool(get_settings().agent_access_token)}
 
 
 @router.post("/check")
