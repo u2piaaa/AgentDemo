@@ -46,9 +46,33 @@ def test_vector_citation_includes_score_and_metadata() -> None:
         "document_title": "Vector Guide",
         "chunk_index": 2,
         "source_type": "markdown",
+        "source_uri": None,
         "score": 0.75,
         "retrieval_method": "vector",
     }
+
+
+def test_mcp_resource_citation_includes_source_uri() -> None:
+    service = RagService(session=None)  # type: ignore[arg-type]
+    document = KnowledgeDocument(
+        id=uuid4(),
+        title="MCP Resource",
+        source_type="mcp_resource",
+        source_uri="mcp://fake/doc",
+        status="indexed",
+    )
+    chunk = KnowledgeChunk(
+        id=uuid4(),
+        document_id=document.id,
+        chunk_index=0,
+        content="MCP resource citation.",
+    )
+
+    citation = service._citation(chunk, document, score=1.0, retrieval_method="keyword")
+
+    assert citation.source_type == "mcp_resource"
+    assert citation.source_uri == "mcp://fake/doc"
+    assert citation.model_dump()["metadata"]["source_uri"] == "mcp://fake/doc"
 
 
 @pytest.mark.asyncio

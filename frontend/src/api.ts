@@ -3,6 +3,9 @@ import type {
   Conversation,
   KnowledgeDocument,
   Message,
+  McpPrompt,
+  McpResource,
+  McpServer,
   StreamEvent,
   Task,
   ToolCallData,
@@ -13,9 +16,17 @@ import type {
 
 const jsonHeaders = { "Content-Type": "application/json" };
 let authToken = localStorage.getItem("agent_auth_token") ?? "";
+let accessToken = localStorage.getItem("agent_access_token") ?? "";
+
+function accessHeaders(token = accessToken): Record<string, string> {
+  return token ? { "x-agent-access-token": token } : {};
+}
 
 function authHeaders(): Record<string, string> {
-  return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+  return {
+    ...accessHeaders(),
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
+  };
 }
 
 function jsonAuthHeaders(): Record<string, string> {
@@ -32,10 +43,30 @@ export function clearAuthToken() {
   localStorage.removeItem("agent_auth_token");
 }
 
+export function setAccessToken(token: string) {
+  accessToken = token;
+  localStorage.setItem("agent_access_token", token);
+}
+
+export function clearAccessToken() {
+  accessToken = "";
+  localStorage.removeItem("agent_access_token");
+}
+
 export async function getAuthStatus(): Promise<{ required: boolean }> {
   const response = await fetch("/api/auth/status");
   if (!response.ok) throw new Error("Failed to load auth status");
   return response.json();
+}
+
+export async function checkAccessToken(token = accessToken): Promise<boolean> {
+  const response = await fetch("/api/auth/check", {
+    method: "POST",
+    headers: accessHeaders(token)
+  });
+  if (!response.ok) return false;
+  const payload = await response.json();
+  return Boolean(payload.ok);
 }
 
 export async function register(username: string, password: string): Promise<AuthResponse> {
@@ -81,6 +112,24 @@ export async function getMessages(conversationId: string): Promise<Message[]> {
 export async function getTools(): Promise<ToolManifest[]> {
   const response = await fetch("/api/tools", { headers: authHeaders() });
   if (!response.ok) throw new Error(await readError(response, "Failed to load tools"));
+  return response.json();
+}
+
+export async function getMcpServers(): Promise<McpServer[]> {
+  const response = await fetch("/api/mcp/servers", { headers: authHeaders() });
+  if (!response.ok) throw new Error(await readError(response, "Failed to load MCP servers"));
+  return response.json();
+}
+
+export async function getMcpResources(): Promise<McpResource[]> {
+  const response = await fetch("/api/mcp/resources", { headers: authHeaders() });
+  if (!response.ok) throw new Error(await readError(response, "Failed to load MCP resources"));
+  return response.json();
+}
+
+export async function getMcpPrompts(): Promise<McpPrompt[]> {
+  const response = await fetch("/api/mcp/prompts", { headers: authHeaders() });
+  if (!response.ok) throw new Error(await readError(response, "Failed to load MCP prompts"));
   return response.json();
 }
 
@@ -169,7 +218,41 @@ export async function streamChat(
   if (!response.ok) throw new Error(await readError(response, "Failed to start chat stream"));
   if (!response.body) throw new Error("Failed to start chat stream: empty response body");
 
-  const reader = response.body.getReader();
+  await readEventStream(response.body, onEvent);
+}
+
+export async function streamConfirmedTool(
+  payload: {
+    conversationId: string;
+    message: string;
+    toolName: string;
+    arguments: Record<string, unknown>;
+    reason?: string;
+  },
+  onEvent: (event: StreamEvent) => void
+): Promise<void> {
+  const response = await fetch("/api/conversations/chat/confirm/stream", {
+    method: "POST",
+    headers: jsonAuthHeaders(),
+    body: JSON.stringify({
+      conversation_id: payload.conversationId,
+      message: payload.message,
+      tool_name: payload.toolName,
+      arguments: payload.arguments,
+      reason: payload.reason ?? "Confirmed by the user."
+    })
+  });
+  if (!response.ok) throw new Error(await readError(response, "Failed to continue tool call"));
+  if (!response.body) throw new Error("Failed to continue tool call: empty response body");
+
+  await readEventStream(response.body, onEvent);
+}
+
+async function readEventStream(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (event: StreamEvent) => void
+): Promise<void> {
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
 
@@ -255,6 +338,9 @@ function toStreamEvent(eventName: string, data: unknown): StreamEvent[] {
         data: {
           no_tool: Boolean(data.no_tool),
           tool_name: stringOrNull(data.tool_name),
+          provider: stringOrUndefined(data.provider),
+          provider_tool_id: stringOrNull(data.provider_tool_id),
+          server_name: stringOrNull(data.server_name),
           arguments: recordOrEmpty(data.arguments),
           reason: typeof data.reason === "string" ? data.reason : "",
           requires_confirmation: Boolean(data.requires_confirmation)
@@ -287,6 +373,8 @@ function toStreamEvent(eventName: string, data: unknown): StreamEvent[] {
           conversation_id: data.conversation_id,
           citations: Array.isArray(data.citations) ? data.citations : [],
           tool_calls: Array.isArray(data.tool_calls) ? data.tool_calls : undefined,
+          mcp_resources: Array.isArray(data.mcp_resources) ? (data.mcp_resources as McpResource[]) : undefined,
+          mcp_prompts: Array.isArray(data.mcp_prompts) ? (data.mcp_prompts as McpPrompt[]) : undefined,
           trace_id: stringOrUndefined(data.trace_id),
           model_route: isRecord(data.model_route) ? data.model_route : undefined
         }

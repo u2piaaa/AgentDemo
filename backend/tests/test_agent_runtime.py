@@ -5,10 +5,13 @@ from uuid import uuid4
 import pytest
 
 from app.agent.runtime import AgentRuntime
-from app.models.conversation import Conversation, Message
-from app.schemas import AgentToolPlan, ChatRequest
-from app.services.model_gateway import ModelRoute
-from app.services.plugin_registry import PluginManifest, RegisteredTool
+from app.mcp.client import McpClientManager
+from app.mcp.config import McpConfig, McpServerConfig
+from app.mcp.registry import UnifiedToolRegistry
+from app.models.conversation import Conversation, MemorySummary, Message
+from app.schemas import AgentToolPlan, ChatRequest, ToolConfirmationRequest
+from app.services.model_gateway import ModelRoute, StructuredToolPlan
+from app.services.plugin_registry import PluginManifest, PluginRegistry, RegisteredTool
 
 
 class ScalarResult:
@@ -38,7 +41,6 @@ class FakeSession:
         for item in self.items:
             if isinstance(item, Conversation) and item.id is None:
                 item.id = uuid4()
-        return None
 
     async def commit(self) -> None:
         self.commit_count += 1
@@ -55,9 +57,26 @@ class FakeRag:
 class FakeGateway:
     def __init__(self) -> None:
         self.stream_calls = []
+        self.summary_calls = []
 
     def route(self, task_type: str, prompt: str) -> ModelRoute:
         return ModelRoute(model_name="fake-chat", provider="fake", reason=f"fake_{task_type}")
+
+    def plan_tool_call(self, prompt: str, candidates: list[dict]) -> StructuredToolPlan:
+        lowered = prompt.lower()
+        for tool in candidates:
+            names = [
+                str(tool.get("name") or "").lower(),
+                str(tool.get("provider_tool_id") or "").lower(),
+            ]
+            if any(name and name in lowered for name in names):
+                return StructuredToolPlan(
+                    no_tool=False,
+                    tool_name=str(tool["name"]),
+                    arguments={},
+                    reason="fake mcp plan",
+                )
+        return StructuredToolPlan(no_tool=True, reason="fake no tool")
 
     async def stream_reply(
         self,
@@ -84,6 +103,12 @@ class FakeGateway:
         for token in text.split(" "):
             yield token + " "
 
+    async def summarize_messages(self, messages, existing_summary=None):
+        self.summary_calls.append(
+            {"messages": messages, "existing_summary": existing_summary}
+        )
+        return "The user prefers concise project notes."
+
 
 class FakeRegistry:
     def __init__(self, tool: RegisteredTool | None) -> None:
@@ -95,12 +120,12 @@ class FakeRegistry:
         return None
 
 
-def make_read_file_tool(handler) -> RegisteredTool:
+def make_read_file_tool(handler, requires_confirmation: bool = False) -> RegisteredTool:
     manifest = PluginManifest(
         name="read_file",
         description="Read a file.",
         permission="filesystem_read",
-        requires_confirmation=False,
+        requires_confirmation=requires_confirmation,
         parameters={
             "type": "object",
             "required": ["path"],
@@ -118,6 +143,45 @@ def successful_read_file(path: str) -> dict[str, str | int]:
 
 def failing_read_file(path: str) -> None:
     raise FileNotFoundError(f"missing {path}")
+
+
+async def make_mcp_registry() -> UnifiedToolRegistry:
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="fake",
+                    tools=[
+                        {
+                            "name": "lookup",
+                            "description": "Lookup from fake MCP.",
+                            "inputSchema": {"type": "object"},
+                            "annotations": {"permission": "read"},
+                            "mock_result": {
+                                "content": [{"type": "text", "text": "fake mcp value"}]
+                            },
+                        }
+                    ],
+                    resources=[
+                        {
+                            "uri": "mcp://fake/doc",
+                            "name": "fake doc",
+                            "text": "resource context from MCP",
+                        }
+                    ],
+                    prompts=[
+                        {
+                            "name": "tool_planning",
+                            "messages": [{"role": "user", "content": "prompt from MCP"}],
+                        }
+                    ],
+                )
+            ]
+        )
+    )
+    registry = UnifiedToolRegistry(PluginRegistry(Path(".")), client)
+    await registry.refresh_mcp_tools()
+    return registry
 
 
 async def collect_events(runtime: AgentRuntime, message: str) -> list[tuple[str, dict]]:
@@ -193,6 +257,51 @@ async def test_tool_failure_is_available_to_final_answer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fake_mcp_tool_is_planned_and_called() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=await make_mcp_registry(),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "Use fake lookup for this answer")
+
+    tool_call = next(data for name, data in events if name == "tool_call")
+    tool_result = next(data for name, data in events if name == "tool_result")
+    assert tool_call["provider"] == "mcp_server"
+    assert tool_call["server_name"] == "fake"
+    assert tool_result["provider"] == "mcp_server"
+    assert tool_result["output"]["content"] == "fake mcp value"
+    metadata = assistant_messages(session)[0].metadata_
+    assert metadata["tool_calls"][0]["provider"] == "mcp_server"
+
+
+@pytest.mark.asyncio
+async def test_mcp_resource_and_prompt_enter_answer_context() -> None:
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=FakeSession(),
+        plugin_registry=await make_mcp_registry(),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(
+        runtime,
+        "Use mcp://fake/doc and tool_planning as context.",
+    )
+
+    context = "\n".join(gateway.stream_calls[0]["context"])
+    assert "resource context from MCP" in context
+    assert "prompt from MCP" in context
+    done = events[-1][1]
+    assert done["mcp_resources"][0]["uri"] == "mcp://fake/doc"
+
+
+@pytest.mark.asyncio
 async def test_sse_event_order_for_tool_call() -> None:
     runtime = AgentRuntime(
         session=FakeSession(),
@@ -230,6 +339,104 @@ async def test_assistant_metadata_persists_trace_tool_calls_and_route() -> None:
         "provider": "fake",
         "reason": "fake_conversation",
     }
+
+
+@pytest.mark.asyncio
+async def test_confirmed_tool_stream_executes_blocked_tool() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(
+            make_read_file_tool(successful_read_file, requires_confirmation=True)
+        ),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    blocked_events = await collect_events(runtime, "读取 README.md 并总结")
+    blocked_result = next(data for name, data in blocked_events if name == "tool_result")
+    assert blocked_result["status"] == "failed"
+    assert blocked_result["error"] == "Tool requires confirmation before execution"
+
+    conversation_id = next(item.id for item in session.items if isinstance(item, Conversation))
+    confirmed_events = []
+    async for event in runtime.stream_confirmed_tool(
+        ToolConfirmationRequest(
+            conversation_id=conversation_id,
+            message="读取 README.md 并总结",
+            tool_name="read_file",
+            arguments={"path": "README.md"},
+            reason="User confirmed the file read.",
+        )
+    ):
+        confirmed_events.append((event["event"], json.loads(event["data"])))
+
+    confirmed_result = next(data for name, data in confirmed_events if name == "tool_result")
+    assert confirmed_result["status"] == "success"
+    assert "AgentDemo" in "\n".join(gateway.stream_calls[-1]["context"])
+
+
+class MemoryContextRuntime(AgentRuntime):
+    async def _load_active_memory_summaries(self, conversation_id):
+        return ["The user prefers terse implementation notes."]
+
+    async def _maybe_update_memory_summary(self, conversation_id):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_runtime_loads_memory_summaries_into_answer_context() -> None:
+    gateway = FakeGateway()
+    runtime = MemoryContextRuntime(
+        session=FakeSession(),
+        plugin_registry=None,
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    await collect_events(runtime, "What should you remember?")
+
+    assert gateway.stream_calls[0]["context"] == [
+        "Memory summary:\nThe user prefers terse implementation notes."
+    ]
+
+
+class SummarySession(FakeSession):
+    def __init__(self, messages: list[Message], summaries: list[MemorySummary] | None = None):
+        super().__init__(history=[])
+        self.messages = messages
+        self.summaries = summaries or []
+
+    async def execute(self, statement):
+        text = str(statement)
+        if "memory_summaries" in text:
+            return ScalarResult(self.summaries)
+        return ScalarResult(self.messages)
+
+
+@pytest.mark.asyncio
+async def test_runtime_generates_memory_summary_for_long_conversation() -> None:
+    conversation_id = uuid4()
+    messages = [
+        Message(conversation_id=conversation_id, role="user", content=f"fact {index}")
+        for index in range(4)
+    ]
+    session = SummarySession(messages)
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=None,
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+    runtime.settings.agent_memory_message_limit = 3
+
+    await runtime._maybe_update_memory_summary(conversation_id)
+
+    summaries = [item for item in session.items if isinstance(item, MemorySummary)]
+    assert summaries[0].summary == "The user prefers concise project notes."
+    assert gateway.summary_calls[0]["messages"][0]["content"] == "fact 0"
 
 
 class LoopingRuntime(AgentRuntime):

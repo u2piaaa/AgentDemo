@@ -745,6 +745,39 @@ input:focus-visible {
   -webkit-line-clamp: 4;
 }
 
+.provider-row,
+.task-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.provider-pill {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #e4ebf1;
+  color: #263847;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mini-card .provider-pill {
+  background: #e4ebf1;
+  color: #263847;
+}
+
+.task-events span {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #ecf2e4;
+  color: #496426;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .tool-history-card {
   min-width: 0;
 }

@@ -100,10 +100,11 @@ not confirm, the executor returns a failed response with:
 Tool requires confirmation before execution
 ```
 
-That blocked result is still audited. The current chat-stream runtime does not
-yet expose a continue-after-confirmation endpoint, so confirmation-only tools
-should be tested through the direct `/api/tools/{tool_name}/run` path until the
-runtime continuation API exists.
+That blocked result is still audited. In chat, the frontend can continue a
+blocked tool call by sending the original message, tool name, and arguments to
+`POST /api/conversations/chat/confirm/stream`. The continuation stream emits the
+usual `plan`, `tool_call`, `tool_result`, `token`, and `done` events and stores a
+new assistant message with the confirmed tool result.
 
 ## Safe Paths
 

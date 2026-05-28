@@ -113,14 +113,16 @@ With backend and frontend running:
 8. Cancel a cancellable task and verify it becomes `cancelled`.
 9. Restart the backend with a manually created `running` task and verify startup
    recovery marks it `stale`.
-10. Confirm a tool requiring confirmation is shown as blocked. The backend does
-    not yet support continuing the same chat stream after confirmation.
+10. Confirm a tool requiring confirmation is shown as blocked, then approve it
+    and verify a continuation stream runs the tool and writes a follow-up
+    assistant response.
+11. Continue a long conversation past the configured memory window and verify an
+    active memory summary is generated or updated when model credentials are
+    configured. Without credentials, verify chat still succeeds and memory
+    refresh is skipped.
 
 ## Known Release Notes
 
-- Backend lacks a continue-after-confirmation API for chat-stream tool calls.
-- Memory summary routes exist, but runtime auto-generation and injection remain a
-  postponed or risky area unless a later implementation wires them in.
 - `npm audit` currently reports 2 moderate vulnerabilities.
 - Repository private status cannot be verified by the local agent. Confirm it in
   GitHub repository settings.

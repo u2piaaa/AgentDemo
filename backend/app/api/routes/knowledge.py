@@ -1,7 +1,7 @@
 from io import BytesIO
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pypdf import PdfReader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +10,7 @@ from app.api.routes.auth import CurrentUser
 from app.db.database import get_session
 from app.models.conversation import Conversation
 from app.models.knowledge import KnowledgeDocument
-from app.schemas import KnowledgeDocumentCreate, KnowledgeDocumentRead
+from app.schemas import KnowledgeDocumentCreate, KnowledgeDocumentRead, McpResourceImportRequest
 from app.services.rag import RagService
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
@@ -40,8 +40,32 @@ async def create_document(
 ) -> KnowledgeDocumentRead:
     if payload.conversation_id is not None:
         await require_owned_conversation(session, payload.conversation_id, current_user.id)
-    service = RagService(session)
-    return await service.index_text(payload)
+    service = RagService(session, user_id=current_user.id)
+    return await service.index_text(payload.model_copy(update={"user_id": current_user.id}))
+
+
+@router.post("/mcp-resource", response_model=KnowledgeDocumentRead)
+async def import_mcp_resource(
+    payload: McpResourceImportRequest,
+    current_user: CurrentUser,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> KnowledgeDocumentRead:
+    if payload.conversation_id is not None:
+        await require_owned_conversation(session, payload.conversation_id, current_user.id)
+    resource = await request.app.state.mcp_client.read_resource(payload.server_name, payload.uri)
+    content = str(resource.get("text") or resource.get("content") or "")
+    if not content.strip():
+        raise HTTPException(status_code=422, detail="MCP resource did not contain text")
+    document = KnowledgeDocumentCreate(
+        title=payload.title or str(resource.get("name") or payload.uri),
+        source_type="mcp_resource",
+        source_uri=payload.uri,
+        user_id=current_user.id,
+        conversation_id=payload.conversation_id,
+        content=content,
+    )
+    return await RagService(session, user_id=current_user.id).index_text(document)
 
 
 @router.post("/documents/upload", response_model=KnowledgeDocumentRead)
@@ -61,10 +85,11 @@ async def upload_document(
         title=file.filename or "uploaded-document",
         source_type=detect_source_type(file.filename or "", file.content_type),
         source_uri=f"upload:{file.filename}",
+        user_id=current_user.id,
         conversation_id=conversation_id,
         content=content,
     )
-    return await RagService(session).index_text(payload)
+    return await RagService(session, user_id=current_user.id).index_text(payload)
 
 
 async def require_owned_conversation(
