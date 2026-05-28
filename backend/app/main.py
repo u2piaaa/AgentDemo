@@ -7,7 +7,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, conversations, health, knowledge, tasks, tools
+from app.api.routes import auth, conversations, health, knowledge, memory, tasks, tools
 from app.core.config import get_settings
 from app.services.plugin_registry import PluginRegistry
 from app.services.task_scheduler import TaskScheduler
@@ -23,8 +23,6 @@ class AccessTokenMiddleware(BaseHTTPMiddleware):
         if not request.url.path.startswith("/api"):
             return await call_next(request)
         if request.url.path == "/api/health" or request.url.path.startswith("/api/auth"):
-            return await call_next(request)
-        if request.headers.get("authorization", "").startswith("Bearer "):
             return await call_next(request)
         token = request.headers.get("x-agent-access-token")
         if token != settings.agent_access_token:
@@ -62,6 +60,7 @@ def create_app() -> FastAPI:
     app.include_router(conversations.router, prefix="/api")
     app.include_router(tasks.router, prefix="/api")
     app.include_router(knowledge.router, prefix="/api")
+    app.include_router(memory.router, prefix="/api")
     app.include_router(tools.router, prefix="/api")
     return app
 
