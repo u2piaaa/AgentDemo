@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.schemas import ToolManifestRead
 
+TOOL_PROVIDER_LOCAL_PLUGIN = "local_plugin"
+TOOL_PROVIDER_MCP_SERVER = "mcp_server"
+
 
 class PluginManifest(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z0-9_.-]+$")
@@ -24,14 +27,23 @@ class PluginManifest(BaseModel):
 @dataclass
 class RegisteredTool:
     manifest: PluginManifest
-    handler: Callable[..., Any]
+    handler: Callable[..., Any] | None
     base_dir: Path
+    provider: str = TOOL_PROVIDER_LOCAL_PLUGIN
+    provider_tool_id: str | None = None
+    transport: str = "python"
+    server_name: str | None = None
+    client: Any = None
 
     def to_read_model(self) -> ToolManifestRead:
         return ToolManifestRead(
             name=self.manifest.name,
             description=self.manifest.description,
             permission=self.manifest.permission,
+            provider=self.provider,
+            provider_tool_id=self.provider_tool_id or self.manifest.name,
+            transport=self.transport,
+            server_name=self.server_name,
             requires_confirmation=self.manifest.requires_confirmation,
             enabled=self.manifest.enabled,
             parameters=self.manifest.parameters,
@@ -55,6 +67,9 @@ class PluginRegistry:
             except (ValidationError, ImportError, AttributeError, OSError, json.JSONDecodeError):
                 continue
             self._tools[tool.manifest.name] = tool
+
+    def register_tool(self, tool: RegisteredTool) -> None:
+        self._tools[tool.manifest.name] = tool
 
     def list_tools(self) -> list[RegisteredTool]:
         return sorted(self._tools.values(), key=lambda item: item.manifest.name)

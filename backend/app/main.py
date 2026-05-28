@@ -7,8 +7,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, conversations, health, knowledge, memory, tasks, tools
+from app.api.routes import auth, conversations, health, knowledge, mcp, memory, tasks, tools
 from app.core.config import get_settings
+from app.mcp.client import McpClientManager
+from app.mcp.config import load_mcp_config
+from app.mcp.registry import UnifiedToolRegistry
 from app.services.plugin_registry import PluginRegistry
 from app.services.task_scheduler import TaskScheduler
 
@@ -35,6 +38,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     app.state.plugin_registry = PluginRegistry(settings.plugin_dir)
     app.state.plugin_registry.load()
+    app.state.mcp_client = McpClientManager(load_mcp_config(settings.mcp_config_path))
+    app.state.tool_registry = UnifiedToolRegistry(app.state.plugin_registry, app.state.mcp_client)
+    await app.state.tool_registry.refresh_mcp_tools()
     app.state.task_scheduler = TaskScheduler()
     app.state.task_scheduler.start()
     try:
@@ -62,6 +68,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge.router, prefix="/api")
     app.include_router(memory.router, prefix="/api")
     app.include_router(tools.router, prefix="/api")
+    app.include_router(mcp.router, prefix="/api")
     return app
 
 

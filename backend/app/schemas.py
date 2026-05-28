@@ -145,6 +145,10 @@ class ToolManifestRead(BaseModel):
     name: str
     description: str
     permission: str
+    provider: str = "local_plugin"
+    provider_tool_id: str | None = None
+    transport: str = "python"
+    server_name: str | None = None
     requires_confirmation: bool = False
     enabled: bool
     parameters: dict[str, Any]
@@ -159,6 +163,9 @@ class ToolRunRequest(BaseModel):
 
 class ToolRunResponse(BaseModel):
     tool_name: str
+    provider: str = "local_plugin"
+    provider_tool_id: str | None = None
+    server_name: str | None = None
     status: str = "success"
     output: Any = None
     output_summary: str | None = None

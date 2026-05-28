@@ -1,0 +1,19 @@
+{
+  "name": "list_dir",
+  "description": "List files and directories inside the AgentDemo workspace.",
+  "permission": "read",
+  "requires_confirmation": false,
+  "parameters": {
+    "type": "object",
+    "required": ["path"],
+    "additionalProperties": false,
+    "properties": {
+      "path": { "type": "string", "format": "path" },
+      "max_entries": { "type": "integer" }
+    }
+  },
+  "timeout_seconds": 10,
+  "output_strategy": { "max_chars": 8000 },
+  "entrypoint": "tool.py:run",
+  "enabled": true
+}
