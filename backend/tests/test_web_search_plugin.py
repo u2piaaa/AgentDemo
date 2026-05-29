@@ -54,6 +54,59 @@ def test_bing_provider_requires_api_key(reset_web_search_settings) -> None:
         search_web("latest AI news", settings=reset_web_search_settings)
 
 
+def test_tavily_provider_requires_api_key(reset_web_search_settings) -> None:
+    reset_web_search_settings.web_search_provider = "tavily"
+    reset_web_search_settings.web_search_api_key = ""
+
+    with pytest.raises(RuntimeError, match="WEB_SEARCH_API_KEY is required"):
+        search_web("latest AI news", settings=reset_web_search_settings)
+
+
+def test_tavily_provider_parses_results(reset_web_search_settings, monkeypatch) -> None:
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "results": [
+                    {
+                        "title": "Result title",
+                        "url": "https://example.com/result",
+                        "content": "Result content",
+                    }
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, timeout: int) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def post(self, url: str, json: dict, headers: dict) -> FakeResponse:
+            assert url == "https://api.tavily.com/search"
+            assert headers["Authorization"] == "Bearer tvly-test"
+            assert json["query"] == "latest AI news"
+            assert json["max_results"] == 3
+            return FakeResponse()
+
+    reset_web_search_settings.web_search_provider = "tavily"
+    reset_web_search_settings.web_search_api_key = "tvly-test"
+    reset_web_search_settings.web_search_base_url = "https://api.tavily.com/search"
+    monkeypatch.setattr("app.services.web_search.httpx.Client", FakeClient)
+
+    payload = search_web("latest AI news", max_results=3, settings=reset_web_search_settings)
+
+    assert payload["provider"] == "tavily"
+    assert payload["results"][0]["url"] == "https://example.com/result"
+    assert payload["results"][0]["snippet"] == "Result content"
+
+
 @pytest.mark.asyncio
 async def test_web_search_plugin_loads_and_runs_with_mock_provider(reset_web_search_settings) -> None:
     reset_web_search_settings.web_search_provider = "mock"
