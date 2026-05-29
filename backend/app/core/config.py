@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: int = 120
     embedding_dimensions: int = 1536
     agent_memory_message_limit: int = 12
+    web_search_provider: str = "disabled"
+    web_search_api_key: str = ""
+    web_search_base_url: str = ""
+    web_search_max_results: int = 5
+    web_search_timeout_seconds: int = 10
     mcp_enabled: bool = True
     mcp_server_enabled: bool = True
     mcp_client_enabled: bool = True

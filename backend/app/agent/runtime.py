@@ -22,6 +22,26 @@ from app.services.plugin_registry import TOOL_PROVIDER_MCP_SERVER, PluginRegistr
 from app.services.rag import Citation, RagService
 from app.services.tool_executor import ToolExecutor
 
+WEB_SEARCH_TOOL_NAME = "web_search"
+WEB_SEARCH_TRIGGER_TERMS = (
+    "web search",
+    "search web",
+    "search online",
+    "online search",
+    "internet search",
+    "latest",
+    "current",
+    "today",
+    "news",
+    "\u8054\u7f51\u641c\u7d22",
+    "\u641c\u7d22\u4e00\u4e0b",
+    "\u67e5\u6700\u65b0",
+    "\u6700\u65b0",
+    "\u4eca\u5929",
+    "\u73b0\u5728",
+    "\u65b0\u95fb",
+)
+
 
 class AgentRuntime:
     def __init__(
@@ -212,6 +232,8 @@ class AgentRuntime:
     def _plan_next_step(self, state: AgentExecutionState) -> AgentToolPlan:
         if any(item.get("tool_name") == "read_file" for item in state.tool_calls):
             return AgentToolPlan(no_tool=True, reason="The requested file has already been read.")
+        if any(item.get("tool_name") == WEB_SEARCH_TOOL_NAME for item in state.tool_calls):
+            return AgentToolPlan(no_tool=True, reason="The web has already been searched.")
         path = self._extract_read_file_path(state.message)
         if path is not None and self._requests_file_read(state.message):
             tool = self.plugin_registry.get("read_file") if self.plugin_registry else None
@@ -223,6 +245,18 @@ class AgentRuntime:
                 server_name=tool.server_name if tool else None,
                 arguments={"path": path},
                 reason="The user asked to read a local file before answering.",
+                requires_confirmation=bool(tool and tool.manifest.requires_confirmation),
+            )
+        if self._requests_web_search(state.message):
+            tool = self.plugin_registry.get(WEB_SEARCH_TOOL_NAME) if self.plugin_registry else None
+            return AgentToolPlan(
+                no_tool=False,
+                tool_name=WEB_SEARCH_TOOL_NAME,
+                provider=tool.provider if tool else "local_plugin",
+                provider_tool_id=tool.provider_tool_id if tool else WEB_SEARCH_TOOL_NAME,
+                server_name=tool.server_name if tool else None,
+                arguments=self._web_search_arguments(state.message),
+                reason="The user asked for current or external web information.",
                 requires_confirmation=bool(tool and tool.manifest.requires_confirmation),
             )
         mcp_plan = self._plan_mcp_tool(state)
@@ -392,8 +426,32 @@ class AgentRuntime:
             output = result.output_summary
             if output is None:
                 output = json.dumps(result.output, ensure_ascii=False, default=str)
+            if result.tool_name == WEB_SEARCH_TOOL_NAME:
+                return (
+                    "Web search results. Use these results for current external facts and cite "
+                    f"result URLs when answering:\n{output}"
+                )
             return f"{result.tool_name} succeeded: {output}"
         return f"{result.tool_name} failed with status {result.status}: {result.error}"
+
+    def _requests_web_search(self, message: str) -> bool:
+        lowered = message.lower()
+        return any(term in lowered for term in WEB_SEARCH_TRIGGER_TERMS)
+
+    def _web_search_arguments(self, message: str) -> dict[str, str | int]:
+        arguments: dict[str, str | int] = {"query": " ".join(message.strip().split())}
+        recency_days = self._infer_web_search_recency_days(message)
+        if recency_days is not None:
+            arguments["recency_days"] = recency_days
+        return arguments
+
+    def _infer_web_search_recency_days(self, message: str) -> int | None:
+        lowered = message.lower()
+        if any(term in lowered for term in ("today", "now", "\u4eca\u5929", "\u73b0\u5728")):
+            return 1
+        if any(term in lowered for term in ("latest", "current", "news", "\u6700\u65b0", "\u65b0\u95fb")):
+            return 7
+        return None
 
     def _requests_file_read(self, message: str) -> bool:
         lowered = message.lower()
