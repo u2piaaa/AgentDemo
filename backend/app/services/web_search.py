@@ -112,6 +112,47 @@ class BingSearchProvider:
         ]
 
 
+class TavilySearchProvider:
+    name = "tavily"
+    default_base_url = "https://api.tavily.com/search"
+
+    def __init__(self, settings: Settings) -> None:
+        self.api_key = settings.web_search_api_key
+        self.base_url = settings.web_search_base_url or self.default_base_url
+        self.timeout_seconds = settings.web_search_timeout_seconds
+
+    def search(
+        self,
+        query: str,
+        *,
+        max_results: int,
+        recency_days: int | None = None,
+    ) -> list[SearchResult]:
+        if not self.api_key:
+            raise RuntimeError("WEB_SEARCH_API_KEY is required when WEB_SEARCH_PROVIDER=tavily")
+        payload: dict[str, Any] = {
+            "query": query,
+            "max_results": max_results,
+            "search_depth": "basic",
+            "include_answer": False,
+            "include_raw_content": False,
+        }
+        if recency_days is not None:
+            payload["days"] = max(1, recency_days)
+            payload["topic"] = "news"
+        with httpx.Client(timeout=self.timeout_seconds) as client:
+            response = client.post(
+                self.base_url,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            response.raise_for_status()
+        return _parse_common_results(response.json(), provider=self.name, max_results=max_results)
+
+
 class HttpJsonSearchProvider:
     name = "http-json"
 
@@ -152,6 +193,8 @@ def get_search_provider(settings: Settings | None = None) -> SearchProvider:
         return MockSearchProvider()
     if provider == "bing":
         return BingSearchProvider(settings)
+    if provider == "tavily":
+        return TavilySearchProvider(settings)
     if provider in {"http", "http-json", "generic"}:
         return HttpJsonSearchProvider(settings)
     raise RuntimeError(f"Unsupported WEB_SEARCH_PROVIDER: {settings.web_search_provider}")
