@@ -108,9 +108,15 @@ class AgentRuntime:
         async for event in self._run_tool_loop(state):
             yield event
 
-        yield self._event("status", {"label": "generating", "model": route.model_name})
-        async for token in self._generate_answer(state, route.model_name):
-            yield self._event("token", {"text": token})
+        tool_availability_answer = self._tool_availability_answer(state.message)
+        if tool_availability_answer is not None:
+            yield self._event("status", {"label": "generating", "model": "runtime"})
+            state.final_answer = tool_availability_answer
+            yield self._event("token", {"text": tool_availability_answer})
+        else:
+            yield self._event("status", {"label": "generating", "model": route.model_name})
+            async for token in self._generate_answer(state, route.model_name):
+                yield self._event("token", {"text": token})
 
         yield self._event("status", {"label": "save_assistant_message", "trace_id": state.trace_id})
         await self._save_assistant_message(state, route)
@@ -211,13 +217,7 @@ class AgentRuntime:
         return context
 
     def _available_tools_context(self) -> str:
-        if not self.plugin_registry or not hasattr(self.plugin_registry, "list_tools"):
-            return ""
-        tools = [
-            tool
-            for tool in self.plugin_registry.list_tools()
-            if tool.manifest.enabled
-        ]
+        tools = self._available_tools()
         if not tools:
             return ""
         lines = [
@@ -228,6 +228,43 @@ class AgentRuntime:
             for tool in tools
         )
         return "\n".join(lines)
+
+    def _available_tools(self) -> list:
+        if not self.plugin_registry or not hasattr(self.plugin_registry, "list_tools"):
+            return []
+        return [
+            tool
+            for tool in self.plugin_registry.list_tools()
+            if tool.manifest.enabled
+        ]
+
+    def _tool_availability_answer(self, message: str) -> str | None:
+        lowered = message.lower()
+        if not any(term in lowered for term in ("tool", "\u5de5\u5177")):
+            return None
+        tools = self._available_tools()
+        if not tools:
+            return "\u5f53\u524d\u6ca1\u6709\u5df2\u52a0\u8f7d\u7684\u8fd0\u884c\u65f6\u5de5\u5177\u3002"
+
+        matching_tools = [tool for tool in tools if tool.manifest.name.lower() in lowered]
+        if matching_tools:
+            tool = matching_tools[0]
+            answer = (
+                f"\u6709\uff0c\u6211\u5df2\u7ecf\u52a0\u8f7d\u4e86 `{tool.manifest.name}` "
+                f"\u5de5\u5177\u3002\u7528\u9014\uff1a{tool.manifest.description}"
+            )
+            if tool.manifest.name == WEB_SEARCH_TOOL_NAME:
+                answer += (
+                    "\u3002\u5b83\u53ef\u4ee5\u88ab\u81ea\u52a8\u89e6\u53d1\u6216\u76f4\u63a5\u8c03\u7528\uff0c"
+                    "\u4f46\u771f\u5b9e\u8054\u7f51\u641c\u7d22\u8fd8\u9700\u8981\u5728\u540e\u7aef `.env` "
+                    "\u91cc\u914d\u7f6e `WEB_SEARCH_PROVIDER` \u548c\u5bf9\u5e94 API key\u3002"
+                )
+            return answer
+
+        if any(term in lowered for term in ("available", "list", "\u54ea\u4e9b", "\u5217\u51fa")):
+            names = ", ".join(f"`{tool.manifest.name}`" for tool in tools)
+            return f"\u5f53\u524d\u5df2\u52a0\u8f7d\u7684\u5de5\u5177\u6709\uff1a{names}\u3002"
+        return None
 
     async def _save_assistant_message(self, state: AgentExecutionState, route) -> None:
         if state.conversation_id is None:

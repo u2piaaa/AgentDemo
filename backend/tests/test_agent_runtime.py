@@ -262,19 +262,22 @@ async def test_plain_chat_uses_fake_gateway_without_tool() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_includes_available_tools_in_answer_context() -> None:
+async def test_runtime_answers_named_tool_availability_deterministically() -> None:
     gateway = FakeGateway()
+    session = FakeSession()
     runtime = AgentRuntime(
-        session=FakeSession(),
+        session=session,
         plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
         model_gateway=gateway,  # type: ignore[arg-type]
         rag_service=FakeRag(),  # type: ignore[arg-type]
     )
 
-    await collect_events(runtime, "Do you have a web_search tool?")
+    events = await collect_events(runtime, "检查你有没有web_search工具")
 
-    assert "web_search" in gateway.stream_calls[0]["context"][0]
-    assert "Search the web." in gateway.stream_calls[0]["context"][0]
+    assert next(data for name, data in events if name == "plan")["no_tool"] is True
+    assert "web_search" in assistant_messages(session)[0].content
+    assert "已经加载" in assistant_messages(session)[0].content
+    assert gateway.stream_calls == []
 
 
 @pytest.mark.asyncio
