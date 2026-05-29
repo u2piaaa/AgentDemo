@@ -257,7 +257,24 @@ async def test_plain_chat_uses_fake_gateway_without_tool() -> None:
     assert "tool_call" not in [name for name, _ in events]
     assert next(data for name, data in events if name == "plan")["no_tool"] is True
     assert assistant_messages(session)[0].content == "plain chat response "
-    assert gateway.stream_calls[0]["context"] == []
+    assert "Available runtime tools" in gateway.stream_calls[0]["context"][0]
+    assert "read_file" in gateway.stream_calls[0]["context"][0]
+
+
+@pytest.mark.asyncio
+async def test_runtime_includes_available_tools_in_answer_context() -> None:
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=FakeSession(),
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    await collect_events(runtime, "Do you have a web_search tool?")
+
+    assert "web_search" in gateway.stream_calls[0]["context"][0]
+    assert "Search the web." in gateway.stream_calls[0]["context"][0]
 
 
 @pytest.mark.asyncio

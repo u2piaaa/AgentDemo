@@ -193,6 +193,9 @@ class AgentRuntime:
 
     def _answer_context(self, state: AgentExecutionState) -> list[str]:
         context = [f"Memory summary:\n{summary}" for summary in state.memory_summaries]
+        tool_context = self._available_tools_context()
+        if tool_context:
+            context.append(tool_context)
         context.extend(str(item["content"]) for item in state.citations if item.get("content"))
         context.extend(
             f"MCP resource {item.get('uri')} from {item.get('server_name')}:\n{item.get('text')}"
@@ -206,6 +209,25 @@ class AgentRuntime:
         )
         context.extend(f"Tool observation:\n{observation}" for observation in state.observations)
         return context
+
+    def _available_tools_context(self) -> str:
+        if not self.plugin_registry or not hasattr(self.plugin_registry, "list_tools"):
+            return ""
+        tools = [
+            tool
+            for tool in self.plugin_registry.list_tools()
+            if tool.manifest.enabled
+        ]
+        if not tools:
+            return ""
+        lines = [
+            "Available runtime tools. If the user asks whether a tool exists, answer from this list:"
+        ]
+        lines.extend(
+            f"- {tool.manifest.name}: {tool.manifest.description}"
+            for tool in tools
+        )
+        return "\n".join(lines)
 
     async def _save_assistant_message(self, state: AgentExecutionState, route) -> None:
         if state.conversation_id is None:
