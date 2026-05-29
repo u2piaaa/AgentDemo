@@ -96,6 +96,8 @@ class FakeGateway:
         joined_context = "\n".join(context)
         if "failed with status" in joined_context:
             text = "I could not read the file, so I cannot summarize it."
+        elif "Web search results" in joined_context:
+            text = "Search says the current result is available at https://example.com/news."
         elif "AgentDemo" in joined_context:
             text = "README says AgentDemo is the project."
         else:
@@ -111,13 +113,19 @@ class FakeGateway:
 
 
 class FakeRegistry:
-    def __init__(self, tool: RegisteredTool | None) -> None:
-        self.tool = tool
+    def __init__(self, tool: RegisteredTool | list[RegisteredTool] | None) -> None:
+        if isinstance(tool, list):
+            self.tools = {item.manifest.name: item for item in tool}
+        elif tool is None:
+            self.tools = {}
+        else:
+            self.tools = {tool.manifest.name: tool}
 
     def get(self, name: str) -> RegisteredTool | None:
-        if name == "read_file":
-            return self.tool
-        return None
+        return self.tools.get(name)
+
+    def list_tools(self) -> list[RegisteredTool]:
+        return list(self.tools.values())
 
 
 def make_read_file_tool(handler, requires_confirmation: bool = False) -> RegisteredTool:
@@ -137,12 +145,50 @@ def make_read_file_tool(handler, requires_confirmation: bool = False) -> Registe
     return RegisteredTool(manifest=manifest, handler=handler, base_dir=Path("."))
 
 
+def make_web_search_tool(handler, requires_confirmation: bool = False) -> RegisteredTool:
+    manifest = PluginManifest(
+        name="web_search",
+        description="Search the web.",
+        permission="network",
+        requires_confirmation=requires_confirmation,
+        parameters={
+            "type": "object",
+            "required": ["query"],
+            "additionalProperties": False,
+            "properties": {
+                "query": {"type": "string"},
+                "max_results": {"type": "integer"},
+                "recency_days": {"type": "integer"},
+            },
+        },
+        entrypoint="tool.py:run",
+    )
+    return RegisteredTool(manifest=manifest, handler=handler, base_dir=Path("."))
+
+
 def successful_read_file(path: str) -> dict[str, str | int]:
     return {"path": path, "chars": 24, "content": "AgentDemo runtime README"}
 
 
 def failing_read_file(path: str) -> None:
     raise FileNotFoundError(f"missing {path}")
+
+
+def successful_web_search(query: str, max_results: int | None = None, recency_days: int | None = None):
+    return {
+        "query": query,
+        "provider": "mock",
+        "results": [
+            {
+                "title": "Current AI news",
+                "url": "https://example.com/news",
+                "snippet": "A current search result.",
+                "source": "mock",
+                "published_at": None,
+            }
+        ],
+        "recency_days": recency_days,
+    }
 
 
 async def make_mcp_registry() -> UnifiedToolRegistry:
@@ -254,6 +300,50 @@ async def test_tool_failure_is_available_to_final_answer() -> None:
     tool_result = next(data for name, data in events if name == "tool_result")
     assert tool_result["status"] == "failed"
     assert "could not read" in assistant_messages(session)[0].content
+
+
+@pytest.mark.asyncio
+async def test_web_search_request_triggers_tool_and_influences_answer() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "联网搜索今天的 AI 新闻")
+
+    names = [name for name, _ in events]
+    tool_call = next(data for name, data in events if name == "tool_call")
+    tool_result = next(data for name, data in events if name == "tool_result")
+    assert "tool_call" in names
+    assert tool_call["tool_name"] == "web_search"
+    assert tool_call["arguments"]["query"] == "联网搜索今天的 AI 新闻"
+    assert tool_call["arguments"]["recency_days"] == 1
+    assert tool_result["status"] == "success"
+    assert "Web search results" in "\n".join(gateway.stream_calls[0]["context"])
+    assert "https://example.com/news" in assistant_messages(session)[0].content
+
+
+@pytest.mark.asyncio
+async def test_web_search_call_is_persisted_in_assistant_metadata() -> None:
+    session = FakeSession()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "latest AI news")
+
+    metadata = assistant_messages(session)[0].metadata_
+    done = events[-1][1]
+    assert metadata["tool_calls"][0]["tool_name"] == "web_search"
+    assert metadata["tool_calls"][0]["requires_confirmation"] is False
+    assert done["tool_calls"][0]["tool_name"] == "web_search"
 
 
 @pytest.mark.asyncio
