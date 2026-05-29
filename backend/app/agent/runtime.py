@@ -240,14 +240,16 @@ class AgentRuntime:
 
     def _tool_availability_answer(self, message: str) -> str | None:
         lowered = message.lower()
-        if not any(term in lowered for term in ("tool", "\u5de5\u5177")):
-            return None
         tools = self._available_tools()
         if not tools:
-            return "\u5f53\u524d\u6ca1\u6709\u5df2\u52a0\u8f7d\u7684\u8fd0\u884c\u65f6\u5de5\u5177\u3002"
+            if self._requests_tool_inventory(lowered):
+                return "\u5f53\u524d\u6ca1\u6709\u5df2\u52a0\u8f7d\u7684\u8fd0\u884c\u65f6\u5de5\u5177\u3002"
+            return None
 
         matching_tools = [tool for tool in tools if tool.manifest.name.lower() in lowered]
         if matching_tools:
+            if not self._requests_tool_inventory(lowered):
+                return None
             tool = matching_tools[0]
             answer = (
                 f"\u6709\uff0c\u6211\u5df2\u7ecf\u52a0\u8f7d\u4e86 `{tool.manifest.name}` "
@@ -261,10 +263,20 @@ class AgentRuntime:
                 )
             return answer
 
-        if any(term in lowered for term in ("available", "list", "\u54ea\u4e9b", "\u5217\u51fa")):
+        if self._requests_tool_inventory(lowered):
             names = ", ".join(f"`{tool.manifest.name}`" for tool in tools)
             return f"\u5f53\u524d\u5df2\u52a0\u8f7d\u7684\u5de5\u5177\u6709\uff1a{names}\u3002"
         return None
+
+    def _requests_tool_inventory(self, lowered_message: str) -> bool:
+        return (
+            bool(re.search(r"\b(available|exists|have|check|list)\b", lowered_message))
+            or bool(re.search(r"\btools?\b", lowered_message))
+            or any(
+                term in lowered_message
+                for term in ("\u5de5\u5177", "\u6709\u6ca1\u6709", "\u6709\u65e0", "\u662f\u5426", "\u68c0\u67e5", "\u5217\u51fa", "\u54ea\u4e9b")
+            )
+        )
 
     async def _save_assistant_message(self, state: AgentExecutionState, route) -> None:
         if state.conversation_id is None:
