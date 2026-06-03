@@ -1,14 +1,17 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.api.routes.auth import CurrentUser
 from app.agent.runtime import AgentRuntime
 from app.db.database import get_session
-from app.models.conversation import Conversation, Message
+from app.models.conversation import Conversation, MemorySummary, Message
+from app.models.knowledge import KnowledgeChunk, KnowledgeDocument
+from app.models.task import Task
+from app.models.tool import ToolCall
 from app.schemas import (
     ChatRequest,
     ConversationCreate,
@@ -74,6 +77,7 @@ async def delete_conversation(
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    await cleanup_conversation_records(session, conversation_id)
     await session.delete(conversation)
     await session.commit()
 
@@ -145,3 +149,17 @@ async def get_owned_conversation(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def cleanup_conversation_records(session: AsyncSession, conversation_id: UUID) -> None:
+    document_ids = select(KnowledgeDocument.id).where(KnowledgeDocument.conversation_id == conversation_id)
+    await session.execute(
+        update(Task).where(Task.conversation_id == conversation_id).values(conversation_id=None)
+    )
+    await session.execute(
+        update(ToolCall).where(ToolCall.conversation_id == conversation_id).values(conversation_id=None)
+    )
+    await session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id.in_(document_ids)))
+    await session.execute(delete(KnowledgeDocument).where(KnowledgeDocument.conversation_id == conversation_id))
+    await session.execute(delete(MemorySummary).where(MemorySummary.conversation_id == conversation_id))
+    await session.execute(delete(Message).where(Message.conversation_id == conversation_id))
