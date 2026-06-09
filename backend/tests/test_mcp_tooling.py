@@ -56,6 +56,48 @@ class FakeTaskSession:
         self.commit_count += 1
 
 
+class FakeHttpResponse:
+    def __init__(
+        self,
+        payload: dict | list | None = None,
+        *,
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+        text: str = "",
+    ) -> None:
+        self._payload = payload
+        self.status_code = status_code
+        self.headers = headers or {"content-type": "application/json"}
+        self.text = text
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("No JSON body")
+        return self._payload
+
+
+def install_fake_http_client(monkeypatch, responder):
+    instances = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            self.calls = []
+            instances.append(self)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        async def post(self, url, *, headers, json):
+            self.calls.append({"url": url, "headers": headers, "json": json})
+            return responder(json, headers)
+
+    monkeypatch.setattr("app.mcp.client.httpx.AsyncClient", FakeAsyncClient)
+    return instances
+
+
 def test_local_tool_maps_to_mcp_schema() -> None:
     schema = local_tool_to_mcp_schema(make_local_tool())
 
@@ -274,6 +316,164 @@ while True:
 
 
 @pytest.mark.asyncio
+async def test_http_mcp_server_lists_tools_and_expands_header_env(monkeypatch) -> None:
+    monkeypatch.setenv("HUGGINGFACE_TOKEN", "hf-test-token")
+
+    def responder(payload, headers):
+        method = payload["method"]
+        if method == "initialize":
+            return FakeHttpResponse(
+                {"jsonrpc": "2.0", "id": payload["id"], "result": {"capabilities": {}}},
+                headers={"content-type": "application/json", "Mcp-Session-Id": "session-1"},
+            )
+        if method == "notifications/initialized":
+            return FakeHttpResponse(status_code=202)
+        return FakeHttpResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "result": {
+                    "tools": [
+                        {
+                            "name": "model_search",
+                            "description": "Search Hugging Face models.",
+                            "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                        }
+                    ]
+                },
+            }
+        )
+
+    instances = install_fake_http_client(monkeypatch, responder)
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="huggingface",
+                    transport="http",
+                    url="https://huggingface.co/mcp",
+                    headers={"Authorization": "Bearer ${HUGGINGFACE_TOKEN}"},
+                )
+            ]
+        )
+    )
+
+    tools = await client.list_tools("huggingface")
+
+    assert tools[0]["server_name"] == "huggingface"
+    assert tools[0]["transport"] == "http"
+    assert tools[0]["name"] == "model_search"
+    assert instances[0].calls[0]["headers"]["Authorization"] == "Bearer hf-test-token"
+    assert instances[0].calls[-1]["headers"]["Mcp-Session-Id"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_mcp_server_parses_sse_tools_list(monkeypatch) -> None:
+    def responder(payload, headers):
+        method = payload["method"]
+        if method == "initialize":
+            return FakeHttpResponse(
+                {"jsonrpc": "2.0", "id": payload["id"], "result": {"capabilities": {}}}
+            )
+        if method == "notifications/initialized":
+            return FakeHttpResponse(status_code=202)
+        body = (
+            'data: {"jsonrpc":"2.0","id":2,"result":{"tools":'
+            '[{"name":"dataset_search","inputSchema":{"type":"object"}}]}}\n\n'
+        )
+        return FakeHttpResponse(headers={"content-type": "text/event-stream"}, text=body)
+
+    install_fake_http_client(monkeypatch, responder)
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="huggingface",
+                    transport="streamable-http",
+                    url="https://huggingface.co/mcp",
+                )
+            ]
+        )
+    )
+
+    tools = await client.list_tools("huggingface")
+
+    assert [tool["name"] for tool in tools] == ["dataset_search"]
+
+
+@pytest.mark.asyncio
+async def test_http_mcp_server_calls_tool(monkeypatch) -> None:
+    def responder(payload, headers):
+        method = payload["method"]
+        if method == "initialize":
+            return FakeHttpResponse(
+                {"jsonrpc": "2.0", "id": payload["id"], "result": {"capabilities": {}}}
+            )
+        if method == "notifications/initialized":
+            return FakeHttpResponse(status_code=202)
+        assert payload["params"] == {
+            "name": "model_search",
+            "arguments": {"query": "Qwen 3 quantized"},
+        }
+        return FakeHttpResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Qwen/Qwen3 model result https://huggingface.co/Qwen/Qwen3",
+                        }
+                    ]
+                },
+            }
+        )
+
+    install_fake_http_client(monkeypatch, responder)
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="huggingface",
+                    transport="http",
+                    url="https://huggingface.co/mcp",
+                )
+            ]
+        )
+    )
+
+    result = await client.call_tool("huggingface", "model_search", {"query": "Qwen 3 quantized"})
+
+    assert "Qwen/Qwen3" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_http_mcp_server_reports_401_clearly(monkeypatch) -> None:
+    def responder(payload, headers):
+        return FakeHttpResponse(status_code=401, text="Unauthorized")
+
+    install_fake_http_client(monkeypatch, responder)
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="huggingface",
+                    transport="http",
+                    url="https://huggingface.co/mcp",
+                )
+            ]
+        )
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await client.list_tools("huggingface")
+
+    assert "returned 401" in str(exc_info.value)
+    assert "token" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
 async def test_jsonl_stdio_mcp_server_lists_tools(tmp_path: Path) -> None:
     server_script = tmp_path / "jsonl_mcp_server.py"
     server_script.write_text(
@@ -475,6 +675,23 @@ def test_github_mcp_tools_require_network_confirmation() -> None:
     )
 
     assert tool.manifest.name == "mcp.github.get_file_contents"
+    assert tool.manifest.permission == "network"
+    assert tool.manifest.requires_confirmation is True
+
+
+def test_huggingface_mcp_tools_require_network_confirmation() -> None:
+    tool = mcp_tool_to_registered_tool(
+        server_name="huggingface",
+        tool={
+            "name": "run_job",
+            "description": "Run and manage Hugging Face Jobs.",
+            "inputSchema": {"type": "object"},
+        },
+        client=object(),
+        transport="http",
+    )
+
+    assert tool.manifest.name == "mcp.huggingface.run_job"
     assert tool.manifest.permission == "network"
     assert tool.manifest.requires_confirmation is True
 

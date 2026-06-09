@@ -29,9 +29,14 @@ WEB_SEARCH_TOOL_NAME = "web_search"
 MCP_FETCH_TOOL_NAME = "mcp.fetch.fetch"
 MCP_GITHUB_SERVER_NAME = "github"
 MCP_GITHUB_FILE_TOOL_IDS = ("get_file_contents",)
+MCP_HUGGINGFACE_SERVER_NAME = "huggingface"
 FETCH_DEFAULT_MAX_LENGTH = 8000
 FETCH_URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
 GITHUB_URL_RE = re.compile(r"https?://(?:www\.)?github\.com/[^\s<>\"]+", re.IGNORECASE)
+HUGGINGFACE_URL_RE = re.compile(
+    r"https?://(?:www\.)?(?:huggingface\.co|hf\.co)/[^\s<>\"]+",
+    re.IGNORECASE,
+)
 FETCH_INTENT_TERMS = (
     "fetch",
     "read",
@@ -358,6 +363,14 @@ class AgentRuntime:
             )
         if any(item.get("tool_name") == MCP_FETCH_TOOL_NAME for item in state.tool_calls):
             return AgentToolPlan(no_tool=True, reason="The requested web page has already been fetched.")
+        if any(
+            str(item.get("tool_name") or "").startswith("mcp.huggingface.")
+            for item in state.tool_calls
+        ):
+            return AgentToolPlan(
+                no_tool=True,
+                reason="The requested Hugging Face MCP lookup has already been completed.",
+            )
         if any(item.get("tool_name") == WEB_SEARCH_TOOL_NAME for item in state.tool_calls):
             return AgentToolPlan(no_tool=True, reason="The web has already been searched.")
         if self._tool_availability_answer(state.message) is not None:
@@ -381,6 +394,9 @@ class AgentRuntime:
         fetch_plan = self._plan_fetch_tool(state)
         if fetch_plan is not None:
             return fetch_plan
+        huggingface_plan = self._plan_huggingface_tool(state)
+        if huggingface_plan is not None:
+            return huggingface_plan
         if self._requests_web_search(state.message):
             tool = self.plugin_registry.get(WEB_SEARCH_TOOL_NAME) if self.plugin_registry else None
             return AgentToolPlan(
@@ -448,6 +464,45 @@ class AgentRuntime:
             server_name=tool.server_name,
             arguments=self._github_file_arguments(tool, reference),
             reason="The user shared a GitHub link, so read repository content through GitHub MCP before answering.",
+            requires_confirmation=tool.manifest.requires_confirmation,
+        )
+
+    def _plan_huggingface_tool(self, state: AgentExecutionState) -> AgentToolPlan | None:
+        if not self._requests_huggingface_tool(state.message):
+            return None
+        tools = self._find_mcp_server_tools(MCP_HUGGINGFACE_SERVER_NAME)
+        if not tools:
+            return AgentToolPlan(
+                no_tool=True,
+                reason=(
+                    "The user asked for Hugging Face Hub resources, but the "
+                    "Hugging Face MCP server is not available."
+                ),
+            )
+        tool = self._select_huggingface_tool(state.message, tools)
+        if tool is None:
+            planned = self.model_gateway.plan_tool_call(
+                state.message,
+                [candidate.to_read_model().model_dump() for candidate in tools],
+            )
+            if planned.no_tool or planned.tool_name is None:
+                return None
+            tool = self.plugin_registry.get(planned.tool_name) if self.plugin_registry else None
+            if tool is None:
+                return None
+            arguments = planned.arguments or {}
+            reason = planned.reason
+        else:
+            arguments = self._huggingface_arguments(tool, state.message)
+            reason = "The user asked to search or read Hugging Face Hub resources through MCP."
+        return AgentToolPlan(
+            no_tool=False,
+            tool_name=tool.manifest.name,
+            provider=tool.provider,
+            provider_tool_id=tool.provider_tool_id,
+            server_name=tool.server_name,
+            arguments=arguments,
+            reason=reason,
             requires_confirmation=tool.manifest.requires_confirmation,
         )
 
@@ -611,6 +666,12 @@ class AgentRuntime:
                     "GitHub repository content. Analyze this repository or code file from "
                     f"the GitHub MCP result and mention the source GitHub URL if available:\n{output}"
                 )
+            if result.tool_name.startswith("mcp.huggingface."):
+                return (
+                    "Hugging Face Hub MCP results. Use these results for Hugging Face models, "
+                    "datasets, Spaces, papers, documentation, or repository details; preserve "
+                    f"Hub links or resource IDs in the answer:\n{output}"
+                )
             return f"{result.tool_name} succeeded: {output}"
         return f"{result.tool_name} failed with status {result.status}: {result.error}"
 
@@ -679,6 +740,166 @@ class AgentRuntime:
                     and tool.manifest.enabled
                 ):
                     return tool
+        return None
+
+    def _find_mcp_server_tools(self, server_name: str) -> list:
+        if not self.plugin_registry or not hasattr(self.plugin_registry, "list_tools"):
+            return []
+        return [
+            tool
+            for tool in self.plugin_registry.list_tools()
+            if (
+                tool.provider == TOOL_PROVIDER_MCP_SERVER
+                and tool.server_name == server_name
+                and tool.manifest.enabled
+            )
+        ]
+
+    def _requests_huggingface_tool(self, message: str) -> bool:
+        lowered = message.lower()
+        return (
+            "hugging face" in lowered
+            or "huggingface" in lowered
+            or "hf.co/" in lowered
+            or "huggingface.co/" in lowered
+            or "\u62b1\u62b1\u8138" in lowered
+        )
+
+    def _select_huggingface_tool(self, message: str, tools: list):
+        lowered = message.lower()
+        category_terms = [
+            (
+                ("repo", "repository", "details", "readme", "\u4ed3\u5e93", "\u8be6\u60c5"),
+                ("hub_repo_details", "repo_details", "repository details"),
+            ),
+            (
+                ("dataset", "datasets", "\u6570\u636e\u96c6"),
+                ("dataset_search", "hub_repo_search", "repo_search"),
+            ),
+            (("space", "spaces"), ("space_search", "spaces semantic search")),
+            (("paper", "papers", "\u8bba\u6587"), ("paper_search", "papers semantic search")),
+            (
+                ("doc", "docs", "documentation", "peft", "lora", "\u6587\u6863"),
+                ("hf_doc_search", "doc_search", "documentation"),
+            ),
+            (("job", "jobs", "run", "manage", "\u8fd0\u884c", "\u7ba1\u7406"), ("job", "jobs")),
+            (
+                ("model", "models", "\u6a21\u578b", "qwen", "quant", "\u91cf\u5316"),
+                ("model_search", "hub_repo_search", "repo_search"),
+            ),
+        ]
+        if HUGGINGFACE_URL_RE.search(message):
+            category_terms.insert(
+                0,
+                (("repo",), ("hub_repo_details", "repo_details", "repository details")),
+            )
+        for message_terms, tool_terms in category_terms:
+            if not any(term in lowered for term in message_terms):
+                continue
+            matched = self._find_tool_by_terms(tools, tool_terms)
+            if matched is not None:
+                return matched
+        return None
+
+    def _find_tool_by_terms(self, tools: list, terms: tuple[str, ...]):
+        for tool in tools:
+            haystack = " ".join(
+                [
+                    tool.manifest.name.lower(),
+                    str(tool.provider_tool_id or "").lower(),
+                    tool.manifest.description.lower(),
+                ]
+            )
+            if any(term in haystack for term in terms):
+                return tool
+        return None
+
+    def _huggingface_arguments(self, tool, message: str) -> dict[str, str | list[str]]:
+        schema = tool.manifest.parameters if isinstance(tool.manifest.parameters, dict) else {}
+        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        required = set(schema.get("required") or [])
+        reference = self._extract_huggingface_reference(message)
+        arguments: dict[str, str | list[str]] = {}
+
+        def accepts(name: str) -> bool:
+            return not properties or name in properties or name in required
+
+        if reference is not None:
+            for name in ("repo_id", "repository", "id"):
+                if accepts(name):
+                    arguments[name] = reference["repo_id"]
+                    break
+            if accepts("repo_type"):
+                arguments["repo_type"] = reference["repo_type"]
+            elif accepts("type"):
+                arguments["type"] = reference["repo_type"]
+            if accepts("url"):
+                arguments["url"] = reference["url"]
+
+        if accepts("repo_types"):
+            repo_type = self._infer_huggingface_repo_type(message)
+            if repo_type is not None:
+                arguments["repo_types"] = [repo_type]
+
+        query_value = self._huggingface_query(message)
+        for name in ("query", "q", "search", "text", "prompt"):
+            if accepts(name) and name not in arguments:
+                arguments[name] = query_value
+                break
+        return arguments
+
+    def _huggingface_query(self, message: str) -> str:
+        query = " ".join(message.strip().split())
+        query = re.split(
+            r"\b(?:and\s+)?(?:summari[sz]e|list|show)\b|[\uff0c,]\s*(?:and\s+)?summari[sz]e|\u5e76\u603b\u7ed3",
+            query,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip(" .,\u3002\uff0c")
+        english_patterns = [
+            r"^(?:please\s+)?(?:search|find|look\s+up|show)\s+(?:on\s+)?hugging\s+face\s+(?:hub\s+)?(?:models?|datasets?|spaces?|papers?|docs?|documentation)?\s*(?:for|about)?\s*",
+            r"^(?:please\s+)?(?:search|find|look\s+up|show)\s+(?:hugging\s+face\s+)?(?:models?|datasets?|spaces?|papers?|docs?|documentation)\s+(?:for|about)\s+",
+        ]
+        for pattern in english_patterns:
+            query = re.sub(pattern, "", query, flags=re.IGNORECASE).strip()
+        chinese_replacements = (
+            "\u5728 Hugging Face \u4e0a",
+            "\u5728 HuggingFace \u4e0a",
+            "Hugging Face \u4e0a",
+            "HuggingFace \u4e0a",
+            "\u641c\u7d22",
+            "\u67e5\u4e00\u4e0b",
+            "\u67e5",
+            "\u627e",
+        )
+        for term in chinese_replacements:
+            query = query.replace(term, " ")
+        query = " ".join(query.strip(" .,\u3002\uff0c").split())
+        return query or " ".join(message.strip().split())
+
+    def _extract_huggingface_reference(self, message: str) -> dict[str, str] | None:
+        match = HUGGINGFACE_URL_RE.search(message)
+        if match is None:
+            return None
+        url = match.group(0).rstrip(".,;:!?)\u3002\uff0c\uff1b\uff1a\uff01\uff1f\uff09\u3011\u300d'\"")
+        parsed = urlparse(url)
+        parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
+        repo_type = "model"
+        if parts and parts[0] in {"datasets", "spaces"}:
+            repo_type = "dataset" if parts[0] == "datasets" else "space"
+            parts = parts[1:]
+        if len(parts) < 2:
+            return None
+        return {"url": url, "repo_id": "/".join(parts[:2]), "repo_type": repo_type}
+
+    def _infer_huggingface_repo_type(self, message: str) -> str | None:
+        lowered = message.lower()
+        if any(term in lowered for term in ("dataset", "datasets", "\u6570\u636e\u96c6")):
+            return "dataset"
+        if any(term in lowered for term in ("space", "spaces")):
+            return "space"
+        if any(term in lowered for term in ("model", "models", "\u6a21\u578b", "qwen", "quant", "\u91cf\u5316")):
+            return "model"
         return None
 
     def _github_file_arguments(self, tool, reference: dict[str, str]) -> dict[str, str]:

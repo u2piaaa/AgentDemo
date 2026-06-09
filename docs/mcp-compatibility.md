@@ -15,9 +15,32 @@ enabled with `mcp_remote_enabled=true`.
 ## Client Mode
 
 `backend/app/mcp/client.py` loads configured MCP servers through
-`backend/app/mcp/config.py`. The current implementation supports configured
-stdio/mock-style servers for local development and tests. HTTP, SSE, and
-Streamable HTTP remain behind the allowed-transport configuration.
+`backend/app/mcp/config.py`. The implementation supports configured
+stdio/mock-style servers for local development and tests, plus remote HTTP,
+SSE, and Streamable HTTP MCP servers for hosted providers such as Hugging Face.
+HTTP transports run the same MCP JSON-RPC flow used by stdio:
+`initialize`, `notifications/initialized`, `tools/list`, and `tools/call`.
+
+For Hugging Face, open the logged-in settings page at
+https://huggingface.co/settings/mcp and copy the generated client snippet. Map
+the generated server URL to this project's `url` field, the transport to
+`transport`, and any generated headers to `headers`. Keep tokens in `.env` or
+the process environment, for example:
+
+```json
+{
+  "servers": {
+    "huggingface": {
+      "enabled": false,
+      "transport": "http",
+      "url": "https://huggingface.co/mcp",
+      "headers": {
+        "Authorization": "Bearer ${HUGGINGFACE_TOKEN}"
+      }
+    }
+  }
+}
+```
 
 ## Tool Mapping
 
@@ -51,6 +74,10 @@ Access policies are `local-only`, `authenticated`, `disabled`, and `admin-only`.
 Permission classes are `read`, `write`, `execute`, `network`, and `destructive`.
 Risky permissions require confirmation. Config files must not contain plaintext
 secrets; use environment placeholders such as `${API_KEY}`.
+Authorization headers may use bearer placeholders such as
+`Bearer ${HUGGINGFACE_TOKEN}`. Hugging Face MCP tools are registered as network
+tools by default, so calls require confirmation unless a future explicit policy
+marks a public read-only search tool as safe to auto-run.
 
 ## Audit, Trace, And Tasks
 

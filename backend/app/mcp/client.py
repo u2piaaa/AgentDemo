@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from typing import Any
+
+import httpx
 
 from app.mcp.config import McpConfig, McpServerConfig
 
@@ -37,6 +40,8 @@ class McpClientManager:
                 server_tools = server.tools
                 if not server_tools and self._can_call_stdio(server):
                     server_tools = await self._stdio_result_list(server, "tools/list", "tools")
+                if not server_tools and self._can_call_http(server):
+                    server_tools = await self._http_result_list(server, "tools/list", "tools")
             except Exception:
                 if server_name is not None:
                     raise
@@ -70,6 +75,12 @@ class McpClientManager:
                 "tools/call",
                 {"name": tool_name, "arguments": arguments},
             )
+        if self._can_call_http(server):
+            return await self._http_request(
+                server,
+                "tools/call",
+                {"name": tool_name, "arguments": arguments},
+            )
         if tool is None:
             raise RuntimeError(f"MCP tool is not available: {server_name}/{tool_name}")
         return {
@@ -96,6 +107,15 @@ class McpClientManager:
                         if not self._is_method_not_found(exc):
                             raise
                         server_resources = []
+                if not server_resources and self._can_call_http(server):
+                    try:
+                        server_resources = await self._http_result_list(
+                            server, "resources/list", "resources"
+                        )
+                    except RuntimeError as exc:
+                        if not self._is_method_not_found(exc):
+                            raise
+                        server_resources = []
             except Exception:
                 if server_name is not None:
                     raise
@@ -111,6 +131,8 @@ class McpClientManager:
         resource = next((item for item in server.resources if item.get("uri") == uri), None)
         if resource is None and self._can_call_stdio(server):
             return await self._stdio_request(server, "resources/read", {"uri": uri})
+        if resource is None and self._can_call_http(server):
+            return await self._http_request(server, "resources/read", {"uri": uri})
         if resource is None:
             raise RuntimeError(f"MCP resource is not available: {server_name}/{uri}")
         return resource
@@ -124,6 +146,15 @@ class McpClientManager:
                 if not server_prompts and self._can_call_stdio(server):
                     try:
                         server_prompts = await self._stdio_result_list(
+                            server, "prompts/list", "prompts"
+                        )
+                    except RuntimeError as exc:
+                        if not self._is_method_not_found(exc):
+                            raise
+                        server_prompts = []
+                if not server_prompts and self._can_call_http(server):
+                    try:
+                        server_prompts = await self._http_result_list(
                             server, "prompts/list", "prompts"
                         )
                     except RuntimeError as exc:
@@ -145,6 +176,8 @@ class McpClientManager:
         prompt = next((item for item in server.prompts if item.get("name") == name), None)
         if prompt is None and self._can_call_stdio(server):
             return await self._stdio_request(server, "prompts/get", {"name": name})
+        if prompt is None and self._can_call_http(server):
+            return await self._http_request(server, "prompts/get", {"name": name})
         if prompt is None:
             raise RuntimeError(f"MCP prompt is not available: {server_name}/{name}")
         return prompt
@@ -163,6 +196,9 @@ class McpClientManager:
     def _can_call_stdio(self, server: McpServerConfig) -> bool:
         return server.transport == "stdio" and bool(server.command)
 
+    def _can_call_http(self, server: McpServerConfig) -> bool:
+        return server.transport in {"http", "sse", "streamable-http"} and bool(server.url)
+
     async def _stdio_result_list(
         self,
         server: McpServerConfig,
@@ -172,6 +208,128 @@ class McpClientManager:
         result = await self._stdio_request(server, method, {})
         values = result.get(result_key, []) if isinstance(result, dict) else []
         return [item for item in values if isinstance(item, dict)]
+
+    async def _http_result_list(
+        self,
+        server: McpServerConfig,
+        method: str,
+        result_key: str,
+    ) -> list[dict[str, Any]]:
+        result = await self._http_request(server, method, {})
+        values = result.get(result_key, []) if isinstance(result, dict) else []
+        return [item for item in values if isinstance(item, dict)]
+
+    async def _http_request(
+        self,
+        server: McpServerConfig,
+        method: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        headers = self._http_headers(server)
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            initialize_response = await self._http_json_rpc(
+                client,
+                server,
+                headers,
+                1,
+                "initialize",
+                self._initialize_params(server),
+            )
+            session_id = initialize_response.headers.get(
+                "Mcp-Session-Id"
+            ) or initialize_response.headers.get("mcp-session-id")
+            if session_id:
+                headers = {**headers, "Mcp-Session-Id": session_id}
+            await self._http_json_rpc(
+                client,
+                server,
+                headers,
+                None,
+                "notifications/initialized",
+                {},
+            )
+            response = await self._http_json_rpc(client, server, headers, 2, method, params)
+            message = self._parse_http_rpc_message(response, 2, server)
+            if "error" in message:
+                raise RuntimeError(f"MCP server {server.name} returned error: {message['error']}")
+            result = message.get("result", {})
+            if not isinstance(result, dict):
+                raise RuntimeError(f"MCP server {server.name} returned a non-object result")
+            return result
+
+    async def _http_json_rpc(
+        self,
+        client: httpx.AsyncClient,
+        server: McpServerConfig,
+        headers: dict[str, str],
+        request_id: int | None,
+        method: str,
+        params: dict[str, Any],
+    ) -> httpx.Response:
+        payload: dict[str, Any] = {"jsonrpc": "2.0", "method": method, "params": params}
+        if request_id is not None:
+            payload["id"] = request_id
+        try:
+            response = await client.post(str(server.url), headers=headers, json=payload)
+        except httpx.TimeoutException as exc:
+            raise RuntimeError(f"MCP HTTP server {server.name} timed out") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"MCP HTTP server {server.name} could not be reached: {exc.__class__.__name__}"
+            ) from exc
+
+        if response.status_code in {401, 403}:
+            raise RuntimeError(
+                f"MCP HTTP server {server.name} returned {response.status_code}; "
+                "check the configured Hugging Face token or OAuth settings"
+            )
+        if response.status_code >= 400:
+            detail = response.text[:300].strip()
+            raise RuntimeError(
+                f"MCP HTTP server {server.name} returned HTTP {response.status_code}: {detail}"
+            )
+        if request_id is None:
+            return response
+        message = self._parse_http_rpc_message(response, request_id, server)
+        if "error" in message:
+            raise RuntimeError(f"MCP server {server.name} returned error: {message['error']}")
+        return response
+
+    def _parse_http_rpc_message(
+        self,
+        response: httpx.Response,
+        request_id: int,
+        server: McpServerConfig,
+    ) -> dict[str, Any]:
+        content_type = response.headers.get("content-type", "").lower()
+        if "text/event-stream" in content_type:
+            messages = self._parse_sse_messages(response.text)
+        else:
+            try:
+                parsed = response.json()
+            except ValueError as exc:
+                raise RuntimeError(f"MCP HTTP server {server.name} returned invalid JSON") from exc
+            messages = parsed if isinstance(parsed, list) else [parsed]
+        for message in messages:
+            if isinstance(message, dict) and message.get("id") == request_id:
+                return message
+        raise RuntimeError(f"MCP HTTP server {server.name} response missing id {request_id}")
+
+    def _parse_sse_messages(self, text: str) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
+        data_lines: list[str] = []
+        for line in text.splitlines():
+            if line.startswith("data:"):
+                data_lines.append(line[5:].strip())
+                continue
+            if line.strip():
+                continue
+            if data_lines:
+                messages.append(json.loads("\n".join(data_lines)))
+                data_lines = []
+        if data_lines:
+            messages.append(json.loads("\n".join(data_lines)))
+        return messages
 
     async def _stdio_request(
         self,
@@ -207,12 +365,25 @@ class McpClientManager:
     def _process_env(self, server: McpServerConfig) -> dict[str, str]:
         env = os.environ.copy()
         for key, value in server.env.items():
-            if value.startswith("${") and value.endswith("}"):
-                env_name = value[2:-1]
-                env[key] = os.environ.get(env_name, "")
-            else:
-                env[key] = value
+            env[key] = self._expand_env_placeholders(value)
         return env
+
+    def _http_headers(self, server: McpServerConfig) -> dict[str, str]:
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+        }
+        headers.update(
+            {key: self._expand_env_placeholders(value) for key, value in server.headers.items()}
+        )
+        return headers
+
+    def _expand_env_placeholders(self, value: str) -> str:
+        return re.sub(
+            r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",
+            lambda match: os.environ.get(match.group(1), ""),
+            value,
+        )
 
     async def _send_request(
         self,

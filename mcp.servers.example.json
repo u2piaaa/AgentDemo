@@ -37,6 +37,14 @@
         "GITHUB_TOOLS": "get_file_contents",
         "GITHUB_READ_ONLY": "1"
       }
+    },
+    "huggingface": {
+      "enabled": false,
+      "transport": "http",
+      "url": "https://huggingface.co/mcp",
+      "headers": {
+        "Authorization": "Bearer ${HUGGINGFACE_TOKEN}"
+      }
     }
   }
 }
