@@ -1,0 +1,55 @@
+from typing import Literal
+
+from langgraph.graph import END, START, StateGraph
+
+from app.agent.nodes import AgentGraphNodes
+from app.agent.state import AgentGraphState
+
+
+GraphMode = Literal["chat", "confirmed_tool"]
+
+
+def build_agent_graph(runtime, mode: GraphMode = "chat"):
+    nodes = AgentGraphNodes(runtime)
+    graph = StateGraph(AgentGraphState)
+
+    graph.add_node("ensure_conversation", nodes.ensure_conversation)
+    graph.add_node("load_context", nodes.load_context)
+    graph.add_node("save_user_message", nodes.save_user_message)
+    graph.add_node("retrieve_context", nodes.retrieve_context)
+    graph.add_node("plan", nodes.plan)
+    graph.add_node("execute_tool", nodes.execute_tool)
+    graph.add_node("generate_answer", nodes.generate_answer)
+    graph.add_node("save_assistant_message", nodes.save_assistant_message)
+    graph.add_node("update_memory_summary", nodes.update_memory_summary)
+
+    if mode == "confirmed_tool":
+        graph.add_edge(START, "load_context")
+        graph.add_edge("load_context", "retrieve_context")
+        graph.add_edge("retrieve_context", "plan")
+        graph.add_edge("plan", "execute_tool")
+        graph.add_edge("execute_tool", "generate_answer")
+    else:
+        graph.add_edge(START, "ensure_conversation")
+        graph.add_edge("ensure_conversation", "load_context")
+        graph.add_edge("load_context", "save_user_message")
+        graph.add_edge("save_user_message", "retrieve_context")
+        graph.add_edge("retrieve_context", "plan")
+        graph.add_conditional_edges(
+            "plan",
+            _route_after_plan,
+            {"execute_tool": "execute_tool", "generate_answer": "generate_answer"},
+        )
+        graph.add_edge("execute_tool", "plan")
+
+    graph.add_edge("generate_answer", "save_assistant_message")
+    graph.add_edge("save_assistant_message", "update_memory_summary")
+    graph.add_edge("update_memory_summary", END)
+    return graph.compile()
+
+
+def _route_after_plan(state: AgentGraphState) -> str:
+    plan = state.get("plan")
+    if plan is None or plan.no_tool:
+        return "generate_answer"
+    return "execute_tool"

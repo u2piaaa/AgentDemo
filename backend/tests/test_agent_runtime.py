@@ -9,6 +9,7 @@ from app.mcp.client import McpClientManager
 from app.mcp.config import McpConfig, McpServerConfig
 from app.mcp.registry import UnifiedToolRegistry
 from app.models.conversation import Conversation, MemorySummary, Message
+from app.models.tool import ToolCall
 from app.schemas import AgentToolPlan, ChatRequest, ToolConfirmationRequest
 from app.services.model_gateway import ModelRoute, StructuredToolPlan
 from app.services.plugin_registry import PluginManifest, PluginRegistry, RegisteredTool
@@ -262,6 +263,65 @@ async def test_plain_chat_uses_fake_gateway_without_tool() -> None:
 
 
 @pytest.mark.asyncio
+async def test_graph_plain_chat_matches_runtime_contract() -> None:
+    session = FakeSession()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=None,
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "hello there")
+
+    assert [name for name, _ in events[:6]] == [
+        "status",
+        "status",
+        "status",
+        "status",
+        "status",
+        "plan",
+    ]
+    assert [data["label"] for name, data in events if name == "status"][:5] == [
+        "ensure_conversation",
+        "load_history",
+        "save_user_message",
+        "retrieving_context",
+        "planning",
+    ]
+    assert "tool_call" not in [name for name, _ in events]
+    assert events[-1][0] == "done"
+
+
+@pytest.mark.asyncio
+async def test_graph_preserves_done_payload_shape() -> None:
+    runtime = AgentRuntime(
+        session=FakeSession(),
+        plugin_registry=None,
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "hello there")
+    done = events[-1][1]
+
+    assert set(done) == {
+        "conversation_id",
+        "citations",
+        "mcp_resources",
+        "mcp_prompts",
+        "tool_calls",
+        "trace_id",
+        "model_route",
+    }
+    assert done["model_route"] == {
+        "model_name": "fake-chat",
+        "provider": "fake",
+        "reason": "fake_conversation",
+    }
+
+
+@pytest.mark.asyncio
 async def test_runtime_answers_named_tool_availability_deterministically() -> None:
     gateway = FakeGateway()
     session = FakeSession()
@@ -487,6 +547,41 @@ async def test_confirmed_tool_stream_executes_blocked_tool() -> None:
     assert "AgentDemo" in "\n".join(gateway.stream_calls[-1]["context"])
 
 
+@pytest.mark.asyncio
+async def test_graph_confirmed_tool_path_does_not_save_duplicate_user_message() -> None:
+    session = FakeSession()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(
+            make_read_file_tool(successful_read_file, requires_confirmation=True)
+        ),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    await collect_events(runtime, "璇诲彇 README.md 骞舵€荤粨")
+    conversation_id = next(item.id for item in session.items if isinstance(item, Conversation))
+    user_message_count = len(
+        [item for item in session.items if isinstance(item, Message) and item.role == "user"]
+    )
+
+    async for _ in runtime.stream_confirmed_tool(
+        ToolConfirmationRequest(
+            conversation_id=conversation_id,
+            message="璇诲彇 README.md 骞舵€荤粨",
+            tool_name="read_file",
+            arguments={"path": "README.md"},
+            reason="User confirmed the file read.",
+        )
+    ):
+        pass
+
+    assert (
+        len([item for item in session.items if isinstance(item, Message) and item.role == "user"])
+        == user_message_count
+    )
+
+
 class MemoryContextRuntime(AgentRuntime):
     async def _load_active_memory_summaries(self, conversation_id):
         return ["The user prefers terse implementation notes."]
@@ -576,6 +671,43 @@ async def test_max_tool_rounds_stops_looping_planner() -> None:
     assert [data for name, data in events if name == "plan"][-1]["reason"].startswith(
         "Stopped after the maximum"
     )
+
+
+@pytest.mark.asyncio
+async def test_graph_tool_loop_stops_at_max_rounds() -> None:
+    runtime = LoopingRuntime(
+        session=FakeSession(),
+        plugin_registry=FakeRegistry(make_read_file_tool(successful_read_file)),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+        max_tool_rounds=1,
+    )
+
+    events = await collect_events(runtime, "璇诲彇 README.md 骞舵€荤粨")
+
+    assert [name for name, _ in events].count("tool_call") == 1
+    assert [data for name, data in events if name == "plan"][-1]["reason"].startswith(
+        "Stopped after the maximum"
+    )
+
+
+@pytest.mark.asyncio
+async def test_graph_records_tool_audit_through_tool_executor() -> None:
+    session = FakeSession()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_read_file_tool(successful_read_file)),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    await collect_events(runtime, "璇诲彇 README.md 骞舵€荤粨")
+
+    audit = next(item for item in session.items if isinstance(item, ToolCall))
+    assert audit.tool_name == "read_file"
+    assert audit.provider == "local_plugin"
+    assert audit.status == "success"
+    assert audit.input == {"path": "README.md"}
 
 
 def test_chinese_title_normalization_strips_common_prefixes() -> None:
