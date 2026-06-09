@@ -31,18 +31,55 @@ WEB_SEARCH_TRIGGER_TERMS = (
     "search online",
     "online search",
     "internet search",
+    "\u8054\u7f51\u641c\u7d22",
+    "\u641c\u7d22\u4e00\u4e0b",
+    "\u4e0a\u7f51\u67e5",
+    "\u7f51\u4e0a\u641c",
+    "\u67e5\u6700\u65b0",
+)
+WEB_SEARCH_CURRENT_TERMS = (
     "latest",
     "current",
     "today",
+    "recent",
+    "recently",
     "news",
-    "\u8054\u7f51\u641c\u7d22",
-    "\u641c\u7d22\u4e00\u4e0b",
-    "\u67e5\u6700\u65b0",
     "\u6700\u65b0",
+    "\u6700\u8fd1",
+    "\u8fd1\u671f",
     "\u4eca\u5929",
     "\u73b0\u5728",
+    "\u5f53\u524d",
     "\u65b0\u95fb",
+    "\u6d88\u606f",
+    "\u8d44\u8baf",
 )
+WEB_SEARCH_FACT_QUERY_TERMS = (
+    "price",
+    "weather",
+    "score",
+    "stock",
+    "release",
+    "version",
+    "status",
+    "model",
+    "news",
+    "\u4ec0\u4e48",
+    "\u662f\u8c01",
+    "\u591a\u5c11",
+    "\u4ef7\u683c",
+    "\u5929\u6c14",
+    "\u80a1\u4ef7",
+    "\u6c47\u7387",
+    "\u6bd4\u5206",
+    "\u884c\u60c5",
+    "\u7248\u672c",
+    "\u53d1\u5e03",
+    "\u65b0\u95fb",
+    "\u6d88\u606f",
+    "\u8d44\u8baf",
+)
+WEB_SEARCH_QUESTION_RE = re.compile(r"\b(who|what|when|where|which|how many|how much)\b")
 
 
 class AgentRuntime:
@@ -455,7 +492,16 @@ class AgentRuntime:
 
     def _requests_web_search(self, message: str) -> bool:
         lowered = message.lower()
-        return any(term in lowered for term in WEB_SEARCH_TRIGGER_TERMS)
+        if any(term in lowered for term in WEB_SEARCH_TRIGGER_TERMS):
+            return True
+        if not any(term in lowered for term in WEB_SEARCH_CURRENT_TERMS):
+            return False
+        return (
+            WEB_SEARCH_QUESTION_RE.search(lowered) is not None
+            or "\uff1f" in lowered
+            or "?" in lowered
+            or any(term in lowered for term in WEB_SEARCH_FACT_QUERY_TERMS)
+        )
 
     def _web_search_arguments(self, message: str) -> dict[str, str | int]:
         arguments: dict[str, str | int] = {"query": " ".join(message.strip().split())}

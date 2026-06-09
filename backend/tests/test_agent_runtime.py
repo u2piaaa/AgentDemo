@@ -408,6 +408,46 @@ async def test_web_search_request_triggers_tool_and_influences_answer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_persona_instruction_with_now_does_not_trigger_web_search() -> None:
+    session = FakeSession()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(
+        runtime,
+        "\u73b0\u5728\u4f60\u662f\u4e00\u4e2a\u732b\u5a18\uff0c"
+        "\u4ee5\u540e\u8bf4\u8bdd\u7684\u672b\u5c3e\u8981\u52a0\u4e00\u4e2a\u55b5",
+    )
+
+    assert "tool_call" not in [name for name, _ in events]
+    assert next(data for name, data in events if name == "plan")["no_tool"] is True
+    assert assistant_messages(session)[0].content == "plain chat response "
+
+
+@pytest.mark.asyncio
+async def test_current_time_word_without_fact_lookup_does_not_trigger_web_search() -> None:
+    session = FakeSession()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(
+        runtime,
+        "\u4eca\u5929\u5e2e\u6211\u5199\u4e00\u9996\u8bd7",
+    )
+
+    assert "tool_call" not in [name for name, _ in events]
+    assert next(data for name, data in events if name == "plan")["no_tool"] is True
+
+
+@pytest.mark.asyncio
 async def test_web_search_call_is_persisted_in_assistant_metadata() -> None:
     session = FakeSession()
     runtime = AgentRuntime(

@@ -213,7 +213,10 @@ def search_web(
         raise ValueError("Query is required")
     limit = _clamp_limit(max_results, settings.web_search_max_results)
     provider = get_search_provider(settings)
-    results = provider.search(clean_query, max_results=limit, recency_days=recency_days)
+    try:
+        results = provider.search(clean_query, max_results=limit, recency_days=recency_days)
+    except httpx.HTTPError as exc:
+        raise RuntimeError(_format_http_error(provider.name, exc)) from exc
     return {
         "query": clean_query,
         "provider": provider.name,
@@ -238,6 +241,14 @@ def _bing_freshness(recency_days: int | None) -> str | None:
     if recency_days <= 31:
         return "Month"
     return None
+
+
+def _format_http_error(provider: str, exc: httpx.HTTPError) -> str:
+    detail = str(exc) or exc.__class__.__name__
+    return (
+        f"Web search request failed for provider '{provider}': {detail}. "
+        "Check WEB_SEARCH_BASE_URL, network/proxy access, and TLS compatibility."
+    )
 
 
 def _parse_common_results(
