@@ -6,7 +6,8 @@
       "command": "backend\\.venv\\Scripts\\python.exe",
       "args": [
         "-m",
-        "mcp_server_fetch"
+        "mcp_server_fetch",
+        "--ignore-robots-txt"
       ],
       "env": {
         "PYTHONIOENCODING": "utf-8"
