@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 from dataclasses import asdict
 import json
 import re
+from urllib.parse import unquote, urlparse
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -26,8 +27,11 @@ from app.services.tool_executor import ToolExecutor
 
 WEB_SEARCH_TOOL_NAME = "web_search"
 MCP_FETCH_TOOL_NAME = "mcp.fetch.fetch"
+MCP_GITHUB_SERVER_NAME = "github"
+MCP_GITHUB_FILE_TOOL_IDS = ("get_file_contents",)
 FETCH_DEFAULT_MAX_LENGTH = 8000
 FETCH_URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
+GITHUB_URL_RE = re.compile(r"https?://(?:www\.)?github\.com/[^\s<>\"]+", re.IGNORECASE)
 FETCH_INTENT_TERMS = (
     "fetch",
     "read",
@@ -344,6 +348,14 @@ class AgentRuntime:
     def _plan_next_step(self, state: AgentExecutionState) -> AgentToolPlan:
         if any(item.get("tool_name") == "read_file" for item in state.tool_calls):
             return AgentToolPlan(no_tool=True, reason="The requested file has already been read.")
+        if any(
+            str(item.get("tool_name") or "").startswith("mcp.github.")
+            for item in state.tool_calls
+        ):
+            return AgentToolPlan(
+                no_tool=True,
+                reason="The requested GitHub repository content has already been read.",
+            )
         if any(item.get("tool_name") == MCP_FETCH_TOOL_NAME for item in state.tool_calls):
             return AgentToolPlan(no_tool=True, reason="The requested web page has already been fetched.")
         if any(item.get("tool_name") == WEB_SEARCH_TOOL_NAME for item in state.tool_calls):
@@ -363,6 +375,9 @@ class AgentRuntime:
                 reason="The user asked to read a local file before answering.",
                 requires_confirmation=bool(tool and tool.manifest.requires_confirmation),
             )
+        github_plan = self._plan_github_tool(state)
+        if github_plan is not None:
+            return github_plan
         fetch_plan = self._plan_fetch_tool(state)
         if fetch_plan is not None:
             return fetch_plan
@@ -409,6 +424,30 @@ class AgentRuntime:
                 ),
             },
             reason="The user asked to fetch and summarize a specific web page URL.",
+            requires_confirmation=tool.manifest.requires_confirmation,
+        )
+
+    def _plan_github_tool(self, state: AgentExecutionState) -> AgentToolPlan | None:
+        reference = self._extract_github_reference(state.message)
+        if reference is None:
+            return None
+        tool = self._find_mcp_tool(MCP_GITHUB_SERVER_NAME, MCP_GITHUB_FILE_TOOL_IDS)
+        if tool is None:
+            return AgentToolPlan(
+                no_tool=True,
+                reason=(
+                    "The user shared a GitHub link, but the GitHub MCP file-content "
+                    "tool is not available."
+                ),
+            )
+        return AgentToolPlan(
+            no_tool=False,
+            tool_name=tool.manifest.name,
+            provider=tool.provider,
+            provider_tool_id=tool.provider_tool_id,
+            server_name=tool.server_name,
+            arguments=self._github_file_arguments(tool, reference),
+            reason="The user shared a GitHub link, so read repository content through GitHub MCP before answering.",
             requires_confirmation=tool.manifest.requires_confirmation,
         )
 
@@ -567,6 +606,11 @@ class AgentRuntime:
                     "Fetched web page content. Summarize the content from this page and preserve "
                     f"the source URL in the answer: {url}\n{output}"
                 )
+            if result.tool_name.startswith("mcp.github."):
+                return (
+                    "GitHub repository content. Analyze this repository or code file from "
+                    f"the GitHub MCP result and mention the source GitHub URL if available:\n{output}"
+                )
             return f"{result.tool_name} succeeded: {output}"
         return f"{result.tool_name} failed with status {result.status}: {result.error}"
 
@@ -590,6 +634,80 @@ class AgentRuntime:
         if match is None:
             return None
         return match.group(0).rstrip(".,;:!?)\u3002\uff0c\uff1b\uff1a\uff01\uff1f\uff09\u3011\u300d'\"")
+
+    def _extract_github_reference(self, message: str) -> dict[str, str] | None:
+        match = GITHUB_URL_RE.search(message)
+        if match is None:
+            return None
+        url = match.group(0).rstrip(".,;:!?)\u3002\uff0c\uff1b\uff1a\uff01\uff1f\uff09\u3011\u300d'\"")
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return None
+        if parsed.netloc.lower() not in {"github.com", "www.github.com"}:
+            return None
+        parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
+        if len(parts) < 2:
+            return None
+        owner = parts[0]
+        repo = parts[1].removesuffix(".git")
+        if not owner or not repo:
+            return None
+        reference = {
+            "url": url,
+            "owner": owner,
+            "repo": repo,
+            "path": "",
+            "ref": "",
+        }
+        if len(parts) >= 5 and parts[2] == "blob":
+            reference["ref"] = parts[3]
+            reference["path"] = "/".join(parts[4:])
+        elif len(parts) >= 4 and parts[2] == "tree":
+            reference["ref"] = parts[3]
+            reference["path"] = "/".join(parts[4:])
+        return reference
+
+    def _find_mcp_tool(self, server_name: str, provider_tool_ids: tuple[str, ...]):
+        if not self.plugin_registry or not hasattr(self.plugin_registry, "list_tools"):
+            return None
+        for provider_tool_id in provider_tool_ids:
+            for tool in self.plugin_registry.list_tools():
+                if (
+                    tool.provider == TOOL_PROVIDER_MCP_SERVER
+                    and tool.server_name == server_name
+                    and tool.provider_tool_id == provider_tool_id
+                    and tool.manifest.enabled
+                ):
+                    return tool
+        return None
+
+    def _github_file_arguments(self, tool, reference: dict[str, str]) -> dict[str, str]:
+        schema = tool.manifest.parameters if isinstance(tool.manifest.parameters, dict) else {}
+        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        required = set(schema.get("required") or [])
+
+        def accepts(name: str) -> bool:
+            return not properties or name in properties or name in required
+
+        arguments: dict[str, str] = {}
+        if accepts("owner"):
+            arguments["owner"] = reference["owner"]
+        if accepts("repo"):
+            arguments["repo"] = reference["repo"]
+        if accepts("repository"):
+            arguments["repository"] = f"{reference['owner']}/{reference['repo']}"
+        if reference["path"] or accepts("path"):
+            arguments["path"] = reference["path"]
+        if reference["ref"]:
+            if accepts("ref"):
+                arguments["ref"] = reference["ref"]
+            elif accepts("sha"):
+                arguments["sha"] = reference["ref"]
+            elif accepts("branch"):
+                arguments["branch"] = reference["ref"]
+        if accepts("url"):
+            arguments["url"] = reference["url"]
+        return arguments
 
     def _message_without_urls(self, message: str) -> str:
         return FETCH_URL_RE.sub(" ", message)

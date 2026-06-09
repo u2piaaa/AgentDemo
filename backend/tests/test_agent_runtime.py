@@ -97,6 +97,8 @@ class FakeGateway:
         joined_context = "\n".join(context)
         if "failed with status" in joined_context:
             text = "I could not read the file, so I cannot summarize it."
+        elif "GitHub repository content" in joined_context:
+            text = "GitHub MCP returned repository content from https://github.com/u2piaaa/AgentDemo."
         elif "Fetched web page content" in joined_context:
             text = "The page says Example Domain. Source: https://example.com."
         elif "Web search results" in joined_context:
@@ -263,6 +265,48 @@ async def make_mcp_fetch_registry() -> UnifiedToolRegistry:
                                     }
                                 ],
                                 "url": "https://example.com",
+                            },
+                        }
+                    ],
+                )
+            ]
+        )
+    )
+    registry = UnifiedToolRegistry(PluginRegistry(Path(".")), client)
+    await registry.refresh_mcp_tools()
+    return registry
+
+
+async def make_mcp_github_registry() -> UnifiedToolRegistry:
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="github",
+                    tools=[
+                        {
+                            "name": "get_file_contents",
+                            "description": "Get file or directory contents from GitHub.",
+                            "inputSchema": {
+                                "type": "object",
+                                "required": ["owner", "repo"],
+                                "properties": {
+                                    "owner": {"type": "string"},
+                                    "repo": {"type": "string"},
+                                    "path": {"type": "string"},
+                                    "ref": {"type": "string"},
+                                },
+                            },
+                            "mock_result": {
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": (
+                                            "# AgentDemo\n\n"
+                                            "backend/app/agent/runtime.py handles agent planning."
+                                        ),
+                                    }
+                                ],
                             },
                         }
                     ],
@@ -516,6 +560,60 @@ async def test_runtime_answers_fetch_mcp_tool_availability() -> None:
 
 
 @pytest.mark.asyncio
+async def test_github_repo_url_uses_github_mcp_before_fetch() -> None:
+    session = FakeSession()
+    registry = await make_mcp_github_registry()
+    fetch_registry = await make_mcp_fetch_registry()
+    for tool in fetch_registry.list_tools():
+        registry._mcp_tools[tool.manifest.name] = tool
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=registry,  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(
+        runtime,
+        "请分析这个仓库：https://github.com/u2piaaa/AgentDemo",
+    )
+
+    tool_call = next(data for name, data in events if name == "tool_call")
+    tool_result = next(data for name, data in events if name == "tool_result")
+    assert tool_call["tool_name"] == "mcp.github.get_file_contents"
+    assert tool_call["server_name"] == "github"
+    assert tool_call["arguments"] == {"owner": "u2piaaa", "repo": "AgentDemo", "path": ""}
+    assert tool_call["requires_confirmation"] is True
+    assert tool_result["error"] == "Tool requires confirmation before execution"
+    assert "token" not in [name for name, _ in events]
+    assert assistant_messages(session) == []
+
+
+@pytest.mark.asyncio
+async def test_github_blob_url_uses_file_path_and_ref() -> None:
+    runtime = AgentRuntime(
+        session=FakeSession(),
+        plugin_registry=await make_mcp_github_registry(),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(
+        runtime,
+        "Analyze https://github.com/u2piaaa/AgentDemo/blob/main/backend/app/main.py",
+    )
+
+    tool_call = next(data for name, data in events if name == "tool_call")
+    assert tool_call["tool_name"] == "mcp.github.get_file_contents"
+    assert tool_call["arguments"] == {
+        "owner": "u2piaaa",
+        "repo": "AgentDemo",
+        "path": "backend/app/main.py",
+        "ref": "main",
+    }
+
+
+@pytest.mark.asyncio
 async def test_confirmed_mcp_fetch_result_enters_final_answer_context() -> None:
     session = FakeSession()
     gateway = FakeGateway()
@@ -546,6 +644,45 @@ async def test_confirmed_mcp_fetch_result_enters_final_answer_context() -> None:
     assert "# Example Domain" in context
     assert "Late page detail after summary cutoff." in context
     assert "Source: https://example.com" in assistant_messages(session)[-1].content
+
+
+@pytest.mark.asyncio
+async def test_confirmed_github_mcp_result_enters_final_answer_context() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=await make_mcp_github_registry(),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+    message = "请分析这个文件：https://github.com/u2piaaa/AgentDemo/blob/main/backend/app/agent/runtime.py"
+    await collect_events(runtime, message)
+    conversation_id = next(item.id for item in session.items if isinstance(item, Conversation))
+
+    confirmed_events = []
+    async for event in runtime.stream_confirmed_tool(
+        ToolConfirmationRequest(
+            conversation_id=conversation_id,
+            message=message,
+            tool_name="mcp.github.get_file_contents",
+            arguments={
+                "owner": "u2piaaa",
+                "repo": "AgentDemo",
+                "path": "backend/app/agent/runtime.py",
+                "ref": "main",
+            },
+            reason="User confirmed the GitHub repository read.",
+        )
+    ):
+        confirmed_events.append((event["event"], json.loads(event["data"])))
+
+    tool_result = next(data for name, data in confirmed_events if name == "tool_result")
+    assert tool_result["status"] == "success"
+    context = "\n".join(gateway.stream_calls[-1]["context"])
+    assert "GitHub repository content" in context
+    assert "backend/app/agent/runtime.py handles agent planning" in context
+    assert "https://github.com/u2piaaa/AgentDemo" in assistant_messages(session)[-1].content
 
 
 @pytest.mark.asyncio

@@ -1422,8 +1422,11 @@ export function App() {
                       </div>
                       <span>{server.transport}</span>
                       <p>
-                        {server.tool_count} tools · {server.resource_count} resources · {server.prompt_count} prompts
+                        {server.registered_tool_count ?? server.tool_count} loaded tools / {server.tool_count} configured tools
+                        {" · "}
+                        {server.resource_count} resources · {server.prompt_count} prompts
                       </p>
+                      {server.error ? <p className="inline-error">{server.error}</p> : null}
                     </div>
                   ))
                 )}

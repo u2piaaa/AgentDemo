@@ -35,7 +35,7 @@ def mcp_tool_to_registered_tool(
     annotations = tool.get("annotations") or {}
     permission = normalize_mcp_permission(annotations.get("permission") or tool.get("permission"))
     name = str(tool["name"])
-    if server_name == "fetch" and name == "fetch":
+    if (server_name == "fetch" and name == "fetch") or server_name == "github":
         permission = "network"
     requires_confirmation = bool(
         annotations.get("requires_confirmation")

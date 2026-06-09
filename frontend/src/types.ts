@@ -63,8 +63,10 @@ export type McpServer = {
   transport: string;
   status: "connected" | "disconnected" | "error" | "disabled" | string;
   tool_count: number;
+  registered_tool_count?: number;
   resource_count: number;
   prompt_count: number;
+  error?: string;
 };
 
 export type McpResource = {
