@@ -101,6 +101,8 @@ class FakeGateway:
             text = "GitHub MCP returned repository content from https://github.com/u2piaaa/AgentDemo."
         elif "Fetched web page content" in joined_context:
             text = "The page says Example Domain. Source: https://example.com."
+        elif "Hugging Face Hub MCP results" in joined_context:
+            text = "Hugging Face returned Qwen/Qwen3 at https://huggingface.co/Qwen/Qwen3."
         elif "Web search results" in joined_context:
             text = "Search says the current result is available at https://example.com/news."
         elif "AgentDemo" in joined_context:
@@ -319,6 +321,56 @@ async def make_mcp_github_registry() -> UnifiedToolRegistry:
     return registry
 
 
+async def make_mcp_huggingface_registry() -> UnifiedToolRegistry:
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="huggingface",
+                    transport="http",
+                    url="https://huggingface.co/mcp",
+                    tools=[
+                        {
+                            "name": "model_search",
+                            "description": "Search Hugging Face models.",
+                            "inputSchema": {
+                                "type": "object",
+                                "required": ["query"],
+                                "properties": {"query": {"type": "string"}},
+                            },
+                            "mock_result": {
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": (
+                                            "Qwen/Qwen3: https://huggingface.co/Qwen/Qwen3"
+                                        ),
+                                    }
+                                ]
+                            },
+                        },
+                        {
+                            "name": "dataset_search",
+                            "description": "Search Hugging Face datasets.",
+                            "inputSchema": {
+                                "type": "object",
+                                "required": ["query"],
+                                "properties": {"query": {"type": "string"}},
+                            },
+                            "mock_result": {
+                                "content": [{"type": "text", "text": "weather dataset"}]
+                            },
+                        },
+                    ],
+                )
+            ]
+        )
+    )
+    registry = UnifiedToolRegistry(PluginRegistry(Path(".")), client)
+    await registry.refresh_mcp_tools()
+    return registry
+
+
 async def collect_events(runtime: AgentRuntime, message: str) -> list[tuple[str, dict]]:
     events = []
     async for event in runtime.stream(ChatRequest(message=message)):
@@ -493,6 +545,62 @@ async def test_web_search_request_triggers_tool_and_influences_answer() -> None:
     assert tool_result["status"] == "success"
     assert "Web search results" in "\n".join(gateway.stream_calls[0]["context"])
     assert "https://example.com/news" in assistant_messages(session)[0].content
+
+
+@pytest.mark.asyncio
+async def test_huggingface_model_search_plans_mcp_before_web_search() -> None:
+    session = FakeSession()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=await make_mcp_huggingface_registry(),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "在 Hugging Face 上找 Qwen 量化模型")
+
+    tool_call = next(data for name, data in events if name == "tool_call")
+    tool_result = next(data for name, data in events if name == "tool_result")
+    assert tool_call["tool_name"] == "mcp.huggingface.model_search"
+    assert tool_call["provider"] == "mcp_server"
+    assert tool_call["server_name"] == "huggingface"
+    assert tool_call["arguments"] == {"query": "Qwen 量化模型"}
+    assert tool_call["requires_confirmation"] is True
+    assert tool_result["status"] == "failed"
+    assert tool_result["error"] == "Tool requires confirmation before execution"
+    assert "web_search" not in [data.get("tool_name") for name, data in events if name == "tool_call"]
+    assert "token" not in [name for name, _ in events]
+
+
+@pytest.mark.asyncio
+async def test_confirmed_huggingface_result_enters_final_answer_context() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=await make_mcp_huggingface_registry(),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+    await collect_events(runtime, "在 Hugging Face 上找 Qwen 量化模型")
+    conversation_id = next(item.id for item in session.items if isinstance(item, Conversation))
+
+    confirmed_events = []
+    async for event in runtime.stream_confirmed_tool(
+        ToolConfirmationRequest(
+            conversation_id=conversation_id,
+            message="在 Hugging Face 上找 Qwen 量化模型",
+            tool_name="mcp.huggingface.model_search",
+            arguments={"query": "Qwen 量化模型"},
+            reason="User confirmed the Hugging Face MCP lookup.",
+        )
+    ):
+        confirmed_events.append((event["event"], json.loads(event["data"])))
+
+    tool_result = next(data for name, data in confirmed_events if name == "tool_result")
+    assert tool_result["status"] == "success"
+    assert "Hugging Face Hub MCP results" in "\n".join(gateway.stream_calls[-1]["context"])
+    assert "https://huggingface.co/Qwen/Qwen3" in assistant_messages(session)[-1].content
 
 
 @pytest.mark.asyncio

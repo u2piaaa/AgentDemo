@@ -148,3 +148,31 @@ def test_mcp_config_secret_detection_and_scrub() -> None:
 
     assert contains_plaintext_mcp_secret(config)
     assert scrub_mcp_config(config)["servers"]["private"]["env"]["API_KEY"] == "***REDACTED***"
+
+
+def test_mcp_config_allows_bearer_env_placeholder_headers() -> None:
+    config = {
+        "servers": {
+            "huggingface": {
+                "transport": "http",
+                "url": "https://huggingface.co/mcp",
+                "headers": {"Authorization": "Bearer ${HUGGINGFACE_TOKEN}"},
+            }
+        }
+    }
+
+    assert not contains_plaintext_mcp_secret(config)
+
+
+def test_mcp_config_rejects_plaintext_authorization_header() -> None:
+    config = {
+        "servers": {
+            "huggingface": {
+                "transport": "http",
+                "url": "https://huggingface.co/mcp",
+                "headers": {"Authorization": "Bearer hf_plaintext_token"},
+            }
+        }
+    }
+
+    assert contains_plaintext_mcp_secret(config)

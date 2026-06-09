@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
+import re
 from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
@@ -187,4 +188,12 @@ def _looks_secret_key(key: str) -> bool:
 def _is_safe_secret_reference(value: Any) -> bool:
     if value in (None, "", "***REDACTED***"):
         return True
-    return isinstance(value, str) and value.startswith("${") and value.endswith("}")
+    if not isinstance(value, str):
+        return False
+    return bool(
+        re.fullmatch(
+            r"(?:Bearer\s+)?\$\{[A-Za-z_][A-Za-z0-9_]*\}",
+            value.strip(),
+            flags=re.IGNORECASE,
+        )
+    )

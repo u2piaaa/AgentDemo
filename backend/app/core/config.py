@@ -36,7 +36,9 @@ class Settings(BaseSettings):
     mcp_server_enabled: bool = True
     mcp_client_enabled: bool = True
     mcp_config_path: Path = Path("../mcp.servers.example.json")
-    mcp_allowed_transports: list[str] = Field(default_factory=lambda: ["stdio"])
+    mcp_allowed_transports: list[str] = Field(
+        default_factory=lambda: ["stdio", "http", "streamable-http"]
+    )
     mcp_max_tool_timeout_seconds: int = 30
     mcp_remote_enabled: bool = False
     mcp_require_confirmation_by_default: bool = True

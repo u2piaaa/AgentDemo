@@ -15,6 +15,8 @@ class McpServerConfig(BaseModel):
     command: str | None = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
     stdio_framing: str = "jsonl"
     enabled: bool = True
     tools: list[dict[str, Any]] = Field(default_factory=list)
