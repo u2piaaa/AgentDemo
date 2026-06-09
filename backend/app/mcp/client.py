@@ -33,9 +33,14 @@ class McpClientManager:
         servers = self._select_servers(server_name)
         tools: list[dict[str, Any]] = []
         for server in servers:
-            server_tools = server.tools
-            if not server_tools and self._can_call_stdio(server):
-                server_tools = await self._stdio_result_list(server, "tools/list", "tools")
+            try:
+                server_tools = server.tools
+                if not server_tools and self._can_call_stdio(server):
+                    server_tools = await self._stdio_result_list(server, "tools/list", "tools")
+            except Exception:
+                if server_name is not None:
+                    raise
+                continue
             tools.extend(
                 {
                     "server_name": server.name,
@@ -80,16 +85,21 @@ class McpClientManager:
         servers = self._select_servers(server_name)
         resources: list[dict[str, Any]] = []
         for server in servers:
-            server_resources = server.resources
-            if not server_resources and self._can_call_stdio(server):
-                try:
-                    server_resources = await self._stdio_result_list(
-                        server, "resources/list", "resources"
-                    )
-                except RuntimeError as exc:
-                    if not self._is_method_not_found(exc):
-                        raise
-                    server_resources = []
+            try:
+                server_resources = server.resources
+                if not server_resources and self._can_call_stdio(server):
+                    try:
+                        server_resources = await self._stdio_result_list(
+                            server, "resources/list", "resources"
+                        )
+                    except RuntimeError as exc:
+                        if not self._is_method_not_found(exc):
+                            raise
+                        server_resources = []
+            except Exception:
+                if server_name is not None:
+                    raise
+                continue
             resources.extend(
                 {"server_name": server.name, "transport": server.transport, **resource}
                 for resource in server_resources
@@ -109,16 +119,21 @@ class McpClientManager:
         servers = self._select_servers(server_name)
         prompts: list[dict[str, Any]] = []
         for server in servers:
-            server_prompts = server.prompts
-            if not server_prompts and self._can_call_stdio(server):
-                try:
-                    server_prompts = await self._stdio_result_list(
-                        server, "prompts/list", "prompts"
-                    )
-                except RuntimeError as exc:
-                    if not self._is_method_not_found(exc):
-                        raise
-                    server_prompts = []
+            try:
+                server_prompts = server.prompts
+                if not server_prompts and self._can_call_stdio(server):
+                    try:
+                        server_prompts = await self._stdio_result_list(
+                            server, "prompts/list", "prompts"
+                        )
+                    except RuntimeError as exc:
+                        if not self._is_method_not_found(exc):
+                            raise
+                        server_prompts = []
+            except Exception:
+                if server_name is not None:
+                    raise
+                continue
             prompts.extend(
                 {"server_name": server.name, "transport": server.transport, **prompt}
                 for prompt in server_prompts

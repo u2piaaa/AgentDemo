@@ -401,6 +401,85 @@ async def test_unified_registry_lists_local_and_mcp_tools() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unified_registry_keeps_working_when_one_mcp_server_fails() -> None:
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="broken",
+                    command="definitely-not-a-real-mcp-command",
+                ),
+                McpServerConfig(
+                    name="fake",
+                    tools=[
+                        {
+                            "name": "lookup",
+                            "description": "Lookup a value.",
+                            "inputSchema": {"type": "object"},
+                            "annotations": {"permission": "read"},
+                        }
+                    ],
+                ),
+            ]
+        )
+    )
+    registry = UnifiedToolRegistry(PluginRegistry(Path(".")), client)
+
+    await registry.refresh_mcp_tools()
+
+    assert [tool.manifest.name for tool in registry.list_tools()] == ["mcp.fake.lookup"]
+    assert "broken" in registry.list_mcp_errors()
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_global_lists_skip_unavailable_servers() -> None:
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="broken",
+                    command="definitely-not-a-real-mcp-command",
+                ),
+                McpServerConfig(
+                    name="fake",
+                    tools=[
+                        {
+                            "name": "lookup",
+                            "description": "Lookup a value.",
+                            "inputSchema": {"type": "object"},
+                        }
+                    ],
+                    resources=[{"uri": "mcp://fake/doc", "name": "fake doc"}],
+                    prompts=[{"name": "fake_prompt"}],
+                ),
+            ]
+        )
+    )
+
+    assert [tool["name"] for tool in await client.list_tools()] == ["lookup"]
+    assert [resource["name"] for resource in await client.list_resources()] == ["fake doc"]
+    assert [prompt["name"] for prompt in await client.list_prompts()] == ["fake_prompt"]
+    with pytest.raises(OSError):
+        await client.list_tools("broken")
+
+
+def test_github_mcp_tools_require_network_confirmation() -> None:
+    tool = mcp_tool_to_registered_tool(
+        server_name="github",
+        tool={
+            "name": "get_file_contents",
+            "description": "Get file contents.",
+            "inputSchema": {"type": "object"},
+        },
+        client=object(),
+    )
+
+    assert tool.manifest.name == "mcp.github.get_file_contents"
+    assert tool.manifest.permission == "network"
+    assert tool.manifest.requires_confirmation is True
+
+
+@pytest.mark.asyncio
 async def test_mcp_tool_call_writes_task_events() -> None:
     client = McpClientManager(
         McpConfig(
