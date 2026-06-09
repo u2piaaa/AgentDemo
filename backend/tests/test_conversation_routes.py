@@ -4,7 +4,9 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.api.routes.conversations import delete_conversation
+from app.api.routes import conversations
+from app.api.routes.conversations import chat_stream, confirm_tool_stream, delete_conversation
+from app.schemas import ChatRequest, ToolConfirmationRequest
 
 
 class FakeResult:
@@ -35,12 +37,83 @@ class FakeDeleteSession:
         self.committed = True
 
 
+class FakeRuntime:
+    seen_registries = []
+
+    def __init__(self, *, plugin_registry, **kwargs) -> None:
+        self.plugin_registry = plugin_registry
+        self.seen_registries.append(plugin_registry)
+
+    async def stream(self, payload):
+        if False:
+            yield {}
+
+    async def stream_confirmed_tool(self, payload):
+        if False:
+            yield {}
+
+
 def executed_table_names(session: FakeDeleteSession) -> list[str]:
     return [
         table.name
         for statement in session.statements
         if (table := getattr(statement, "table", None)) is not None
     ]
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_uses_unified_tool_registry(monkeypatch) -> None:
+    FakeRuntime.seen_registries = []
+    monkeypatch.setattr(conversations, "AgentRuntime", FakeRuntime)
+    tool_registry = SimpleNamespace(name="tool_registry")
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                plugin_registry=SimpleNamespace(name="plugin_registry"),
+                tool_registry=tool_registry,
+            )
+        )
+    )
+
+    await chat_stream(
+        ChatRequest(message="hello"),
+        request=request,  # type: ignore[arg-type]
+        current_user=SimpleNamespace(id=uuid4()),
+        session=FakeDeleteSession(),  # type: ignore[arg-type]
+    )
+
+    assert FakeRuntime.seen_registries == [tool_registry]
+
+
+@pytest.mark.asyncio
+async def test_confirm_tool_stream_uses_unified_tool_registry(monkeypatch) -> None:
+    FakeRuntime.seen_registries = []
+    monkeypatch.setattr(conversations, "AgentRuntime", FakeRuntime)
+    user_id = uuid4()
+    conversation_id = uuid4()
+    tool_registry = SimpleNamespace(name="tool_registry")
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                plugin_registry=SimpleNamespace(name="plugin_registry"),
+                tool_registry=tool_registry,
+            )
+        )
+    )
+
+    await confirm_tool_stream(
+        ToolConfirmationRequest(
+            conversation_id=conversation_id,
+            message="read page",
+            tool_name="mcp.fetch.fetch",
+            arguments={"url": "https://example.com"},
+        ),
+        request=request,  # type: ignore[arg-type]
+        current_user=SimpleNamespace(id=user_id),
+        session=FakeDeleteSession(SimpleNamespace(id=conversation_id, user_id=user_id)),  # type: ignore[arg-type]
+    )
+
+    assert FakeRuntime.seen_registries == [tool_registry]
 
 
 @pytest.mark.asyncio
