@@ -146,102 +146,6 @@ class AgentRuntime:
             )
         )
 
-    async def _execute(
-        self, request: ChatRequest, state: AgentExecutionState
-    ) -> AsyncIterator[dict[str, str]]:
-        yield self._event("status", {"label": "ensure_conversation", "trace_id": state.trace_id})
-        conversation = await self._ensure_conversation(request)
-        state.conversation_id = conversation.id
-
-        yield self._event("status", {"label": "load_history", "trace_id": state.trace_id})
-        state.history = await self._load_recent_history(conversation.id)
-        state.memory_summaries = await self._load_active_memory_summaries(conversation.id)
-        await self._auto_title_conversation(conversation, request.message, state.history)
-
-        yield self._event("status", {"label": "save_user_message", "trace_id": state.trace_id})
-        await self._save_message(conversation.id, "user", request.message)
-
-        yield self._event("status", {"label": "retrieving_context"})
-        state.citations = self._dump_citations(
-            await self._retrieve_context(request.message, conversation.id)
-        )
-        state.mcp_resources = await self._load_mcp_resources_for_context(request.message)
-        state.mcp_prompts = await self._load_mcp_prompts_for_context(request.message)
-
-        route = self.model_gateway.route(request.task_type, request.message)
-        async for event in self._run_tool_loop(state):
-            yield event
-
-        tool_availability_answer = self._tool_availability_answer(state.message)
-        if tool_availability_answer is not None:
-            yield self._event("status", {"label": "generating", "model": "runtime"})
-            state.final_answer = tool_availability_answer
-            yield self._event("token", {"text": tool_availability_answer})
-        else:
-            yield self._event("status", {"label": "generating", "model": route.model_name})
-            async for token in self._generate_answer(state, route.model_name):
-                yield self._event("token", {"text": token})
-
-        yield self._event("status", {"label": "save_assistant_message", "trace_id": state.trace_id})
-        await self._save_assistant_message(state, route)
-        await self._maybe_update_memory_summary(conversation.id)
-        yield self._done_event(conversation.id, state, route)
-
-    async def _execute_confirmed_tool(
-        self, request: ToolConfirmationRequest, state: AgentExecutionState
-    ) -> AsyncIterator[dict[str, str]]:
-        state.conversation_id = request.conversation_id
-
-        yield self._event("status", {"label": "load_history", "trace_id": state.trace_id})
-        state.history = await self._load_recent_history(request.conversation_id)
-        state.memory_summaries = await self._load_active_memory_summaries(request.conversation_id)
-
-        yield self._event("status", {"label": "retrieving_context", "trace_id": state.trace_id})
-        state.citations = self._dump_citations(
-            await self._retrieve_context(request.message, request.conversation_id)
-        )
-        state.mcp_resources = await self._load_mcp_resources_for_context(request.message)
-        state.mcp_prompts = await self._load_mcp_prompts_for_context(request.message)
-
-        route = self.model_gateway.route(request.task_type, request.message)
-        tool = self.plugin_registry.get(request.tool_name) if self.plugin_registry else None
-        state.plan = AgentToolPlan(
-            no_tool=False,
-            tool_name=request.tool_name,
-            provider=tool.provider if tool else "local_plugin",
-            provider_tool_id=tool.provider_tool_id if tool else request.tool_name,
-            server_name=tool.server_name if tool else None,
-            arguments=request.arguments,
-            reason=request.reason,
-            requires_confirmation=False,
-        )
-        yield self._event("plan", state.plan.model_dump())
-        async for event in self._maybe_execute_tool(state):
-            yield event
-
-        yield self._event("status", {"label": "generating", "model": route.model_name})
-        async for token in self._generate_answer(state, route.model_name):
-            yield self._event("token", {"text": token})
-
-        yield self._event("status", {"label": "save_assistant_message", "trace_id": state.trace_id})
-        await self._save_assistant_message(state, route)
-        await self._maybe_update_memory_summary(request.conversation_id)
-        yield self._done_event(request.conversation_id, state, route)
-
-    def _done_event(self, conversation_id: UUID, state: AgentExecutionState, route) -> dict[str, str]:
-        return self._event(
-            "done",
-            {
-                "conversation_id": str(conversation_id),
-                "citations": state.citations,
-                "mcp_resources": state.mcp_resources,
-                "mcp_prompts": state.mcp_prompts,
-                "tool_calls": state.tool_calls,
-                "trace_id": state.trace_id,
-                "model_route": asdict(route),
-            },
-        )
-
     async def _retrieve_context(
         self, message: str, conversation_id: UUID | None
     ) -> list[Citation]:
@@ -428,26 +332,6 @@ class AgentRuntime:
             reason=planned.reason,
             requires_confirmation=tool.manifest.requires_confirmation,
         )
-
-    async def _run_tool_loop(
-        self, state: AgentExecutionState
-    ) -> AsyncIterator[dict[str, str]]:
-        rounds = 0
-        while rounds < self.max_tool_rounds:
-            yield self._event("status", {"label": "planning", "trace_id": state.trace_id})
-            state.plan = self._plan_next_step(state)
-            yield self._event("plan", state.plan.model_dump())
-            if state.plan.no_tool:
-                return
-            async for event in self._maybe_execute_tool(state):
-                yield event
-            rounds += 1
-
-        state.plan = AgentToolPlan(
-            no_tool=True,
-            reason=f"Stopped after the maximum of {self.max_tool_rounds} tool round(s).",
-        )
-        yield self._event("plan", state.plan.model_dump())
 
     async def _maybe_execute_tool(
         self, state: AgentExecutionState
