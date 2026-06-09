@@ -159,10 +159,10 @@ class McpClientManager:
             env=self._process_env(server),
         )
         try:
-            await self._send_request(process, 1, "initialize", self._initialize_params(server))
+            await self._send_request(process, server, 1, "initialize", self._initialize_params(server))
             await self._read_response(process, 1, server)
-            await self._send_notification(process, "notifications/initialized", {})
-            await self._send_request(process, 2, method, params)
+            await self._send_notification(process, server, "notifications/initialized", {})
+            await self._send_request(process, server, 2, method, params)
             return await self._read_response(process, 2, server)
         finally:
             await self._close_process(process)
@@ -188,6 +188,7 @@ class McpClientManager:
     async def _send_request(
         self,
         process: asyncio.subprocess.Process,
+        server: McpServerConfig,
         request_id: int,
         method: str,
         params: dict[str, Any],
@@ -195,25 +196,35 @@ class McpClientManager:
         await self._write_message(
             process,
             {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+            server,
         )
 
     async def _send_notification(
         self,
         process: asyncio.subprocess.Process,
+        server: McpServerConfig,
         method: str,
         params: dict[str, Any],
     ) -> None:
-        await self._write_message(process, {"jsonrpc": "2.0", "method": method, "params": params})
+        await self._write_message(
+            process,
+            {"jsonrpc": "2.0", "method": method, "params": params},
+            server,
+        )
 
     async def _write_message(
         self,
         process: asyncio.subprocess.Process,
         payload: dict[str, Any],
+        server: McpServerConfig,
     ) -> None:
         if process.stdin is None:
             raise RuntimeError("MCP stdio process has no stdin")
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        process.stdin.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body)
+        if server.stdio_framing == "content-length":
+            process.stdin.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body)
+        else:
+            process.stdin.write(body + b"\n")
         await process.stdin.drain()
 
     async def _read_response(

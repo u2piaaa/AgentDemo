@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.mcp_security import McpIdentity, enforce_mcp_tool_policy
+from app.core.mcp_security import McpIdentity, enforce_mcp_tool_policy, validate_mcp_fetch_url
 from app.mcp.tools import normalize_mcp_tool_result
 from app.models.task import Task
 from app.models.tool import ToolCall
@@ -284,6 +284,8 @@ class ToolExecutor:
         if tool.provider == TOOL_PROVIDER_MCP_SERVER:
             if tool.client is None or tool.server_name is None or tool.provider_tool_id is None:
                 raise RuntimeError("MCP tool is missing client metadata")
+            if tool.server_name == "fetch" and tool.provider_tool_id == "fetch":
+                validate_mcp_fetch_url(str(arguments.get("url") or ""))
             enforce_mcp_tool_policy(
                 permission=tool.manifest.permission,
                 requires_confirmation=tool.manifest.requires_confirmation,
