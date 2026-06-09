@@ -13,6 +13,7 @@ from app.core.mcp_security import (
     enforce_mcp_tool_policy,
     requires_mcp_confirmation,
     scrub_mcp_config,
+    validate_mcp_fetch_url,
     validate_mcp_settings,
 )
 
@@ -110,6 +111,29 @@ def test_mcp_workspace_path_must_stay_inside_root(tmp_path: Path) -> None:
         assert_workspace_relative_path("../secret.txt", tmp_path)
 
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost",
+        "https://127.0.0.1/status",
+        "http://0.0.0.0",
+        "http://[::1]/",
+        "http://10.0.0.2",
+        "http://172.16.0.1",
+        "http://192.168.1.10",
+        "http://169.254.169.254/latest/meta-data",
+        "http://metadata.google.internal/computeMetadata/v1/",
+    ],
+)
+def test_fetch_url_blocks_local_private_and_metadata_targets(url: str) -> None:
+    with pytest.raises(HTTPException):
+        validate_mcp_fetch_url(url)
+
+
+def test_fetch_url_allows_public_http_urls() -> None:
+    validate_mcp_fetch_url("https://example.com")
 
 
 def test_mcp_config_secret_detection_and_scrub() -> None:

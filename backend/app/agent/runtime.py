@@ -25,6 +25,29 @@ from app.services.rag import Citation, RagService
 from app.services.tool_executor import ToolExecutor
 
 WEB_SEARCH_TOOL_NAME = "web_search"
+MCP_FETCH_TOOL_NAME = "mcp.fetch.fetch"
+FETCH_DEFAULT_MAX_LENGTH = 8000
+FETCH_URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
+FETCH_INTENT_TERMS = (
+    "fetch",
+    "read",
+    "retrieve",
+    "summarize",
+    "summarise",
+    "summary",
+    "analyze",
+    "analyse",
+    "page",
+    "webpage",
+    "\u603b\u7ed3",
+    "\u6458\u8981",
+    "\u6982\u62ec",
+    "\u6293\u53d6",
+    "\u8bfb\u53d6",
+    "\u5206\u6790",
+    "\u7f51\u9875",
+    "\u9875\u9762",
+)
 WEB_SEARCH_TRIGGER_TERMS = (
     "web search",
     "search web",
@@ -308,6 +331,8 @@ class AgentRuntime:
     def _plan_next_step(self, state: AgentExecutionState) -> AgentToolPlan:
         if any(item.get("tool_name") == "read_file" for item in state.tool_calls):
             return AgentToolPlan(no_tool=True, reason="The requested file has already been read.")
+        if any(item.get("tool_name") == MCP_FETCH_TOOL_NAME for item in state.tool_calls):
+            return AgentToolPlan(no_tool=True, reason="The requested web page has already been fetched.")
         if any(item.get("tool_name") == WEB_SEARCH_TOOL_NAME for item in state.tool_calls):
             return AgentToolPlan(no_tool=True, reason="The web has already been searched.")
         path = self._extract_read_file_path(state.message)
@@ -323,6 +348,9 @@ class AgentRuntime:
                 reason="The user asked to read a local file before answering.",
                 requires_confirmation=bool(tool and tool.manifest.requires_confirmation),
             )
+        fetch_plan = self._plan_fetch_tool(state)
+        if fetch_plan is not None:
+            return fetch_plan
         if self._requests_web_search(state.message):
             tool = self.plugin_registry.get(WEB_SEARCH_TOOL_NAME) if self.plugin_registry else None
             return AgentToolPlan(
@@ -339,6 +367,33 @@ class AgentRuntime:
         if mcp_plan is not None:
             return mcp_plan
         return AgentToolPlan(no_tool=True, reason="No tool is needed for this message.")
+
+    def _plan_fetch_tool(self, state: AgentExecutionState) -> AgentToolPlan | None:
+        url = self._extract_fetch_url(state.message)
+        if url is None or not self._requests_fetch_url(state.message):
+            return None
+        tool = self.plugin_registry.get(MCP_FETCH_TOOL_NAME) if self.plugin_registry else None
+        if tool is None:
+            return AgentToolPlan(
+                no_tool=True,
+                reason="The user asked to read a specific web page, but the fetch MCP tool is not available.",
+            )
+        return AgentToolPlan(
+            no_tool=False,
+            tool_name=tool.manifest.name,
+            provider=tool.provider,
+            provider_tool_id=tool.provider_tool_id,
+            server_name=tool.server_name,
+            arguments={
+                "url": url,
+                "max_length": max(
+                    1,
+                    min(FETCH_DEFAULT_MAX_LENGTH, self.settings.max_tool_output_chars),
+                ),
+            },
+            reason="The user asked to fetch and summarize a specific web page URL.",
+            requires_confirmation=tool.manifest.requires_confirmation,
+        )
 
     def _plan_mcp_tool(self, state: AgentExecutionState) -> AgentToolPlan | None:
         if not self.plugin_registry or not hasattr(self.plugin_registry, "list_tools"):
@@ -487,8 +542,28 @@ class AgentRuntime:
                     "Web search results. Use these results for current external facts and cite "
                     f"result URLs when answering:\n{output}"
                 )
+            if result.tool_name == MCP_FETCH_TOOL_NAME:
+                url = ""
+                if isinstance(result.output, dict):
+                    raw = result.output.get("raw")
+                    if isinstance(raw, dict):
+                        url = str(raw.get("url") or "")
+                return (
+                    "Fetched web page content. Summarize the content from this page and preserve "
+                    f"the source URL in the answer: {url}\n{output}"
+                )
             return f"{result.tool_name} succeeded: {output}"
         return f"{result.tool_name} failed with status {result.status}: {result.error}"
+
+    def _requests_fetch_url(self, message: str) -> bool:
+        lowered = message.lower()
+        return any(term in lowered for term in FETCH_INTENT_TERMS)
+
+    def _extract_fetch_url(self, message: str) -> str | None:
+        match = FETCH_URL_RE.search(message)
+        if match is None:
+            return None
+        return match.group(0).rstrip(".,;:!?)\u3002\uff0c\uff1b\uff1a\uff01\uff1f\uff09\u3011\u300d'\"")
 
     def _requests_web_search(self, message: str) -> bool:
         lowered = message.lower()

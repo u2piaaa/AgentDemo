@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -13,6 +15,7 @@ MCP_ACCESS_POLICIES = {"local-only", "authenticated", "disabled", "admin-only"}
 MCP_PERMISSIONS = {"read", "write", "execute", "network", "destructive"}
 RISKY_MCP_PERMISSIONS = {"write", "execute", "network", "destructive"}
 SECRET_FIELD_MARKERS = ("key", "secret", "token", "password", "credential", "authorization")
+BLOCKED_FETCH_HOSTS = {"localhost", "metadata.google.internal"}
 
 
 @dataclass(frozen=True)
@@ -119,6 +122,33 @@ def assert_workspace_relative_path(path: str, workspace: Path) -> Path:
     if resolved != root and root not in resolved.parents:
         raise HTTPException(status_code=403, detail="MCP path is outside the workspace")
     return resolved
+
+
+def validate_mcp_fetch_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise HTTPException(status_code=422, detail="Fetch URL must use http or https")
+    if not parsed.hostname:
+        raise HTTPException(status_code=422, detail="Fetch URL must include a host")
+
+    hostname = parsed.hostname.rstrip(".").lower()
+    if hostname in BLOCKED_FETCH_HOSTS or hostname.endswith(".localhost"):
+        raise HTTPException(status_code=403, detail="Fetch URL targets a blocked local host")
+
+    try:
+        address = ip_address(hostname)
+    except ValueError:
+        return
+
+    if (
+        address.is_loopback
+        or address.is_private
+        or address.is_link_local
+        or address.is_unspecified
+        or address.is_multicast
+        or address.is_reserved
+    ):
+        raise HTTPException(status_code=403, detail="Fetch URL targets a blocked local or private address")
 
 
 def scrub_mcp_config(value: Any) -> Any:

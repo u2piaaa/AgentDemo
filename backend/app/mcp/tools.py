@@ -34,12 +34,14 @@ def mcp_tool_to_registered_tool(
 ) -> RegisteredTool:
     annotations = tool.get("annotations") or {}
     permission = normalize_mcp_permission(annotations.get("permission") or tool.get("permission"))
+    name = str(tool["name"])
+    if server_name == "fetch" and name == "fetch":
+        permission = "network"
     requires_confirmation = bool(
         annotations.get("requires_confirmation")
         or tool.get("requires_confirmation")
         or requires_mcp_confirmation(permission)
     )
-    name = str(tool["name"])
     manifest = PluginManifest(
         name=f"mcp.{server_name}.{name}",
         description=str(tool.get("description") or f"MCP tool {name} from {server_name}."),

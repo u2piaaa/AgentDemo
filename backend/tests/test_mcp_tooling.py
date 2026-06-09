@@ -105,6 +105,74 @@ async def test_mcp_tool_maps_to_registered_tool_and_executes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_mcp_tool_is_registered_as_network_with_confirmation() -> None:
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="fetch",
+                    tools=[
+                        {
+                            "name": "fetch",
+                            "description": "Fetch a URL.",
+                            "inputSchema": {
+                                "type": "object",
+                                "required": ["url"],
+                                "properties": {"url": {"type": "string"}},
+                            },
+                        }
+                    ],
+                )
+            ]
+        )
+    )
+
+    registered = mcp_tool_to_registered_tool(
+        server_name="fetch",
+        tool=(await client.list_tools())[0],
+        client=client,
+    )
+
+    assert registered.manifest.name == "mcp.fetch.fetch"
+    assert registered.manifest.permission == "network"
+    assert registered.manifest.requires_confirmation is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_mcp_tool_rejects_private_url_even_when_confirmed() -> None:
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="fetch",
+                    tools=[
+                        {
+                            "name": "fetch",
+                            "inputSchema": {
+                                "type": "object",
+                                "required": ["url"],
+                                "properties": {"url": {"type": "string"}},
+                            },
+                            "mock_result": {"content": [{"type": "text", "text": "blocked"}]},
+                        }
+                    ],
+                )
+            ]
+        )
+    )
+    tool = mcp_tool_to_registered_tool(
+        server_name="fetch",
+        tool=(await client.list_tools())[0],
+        client=client,
+    )
+
+    result = await ToolExecutor().run(tool, {"url": "http://127.0.0.1"}, confirmed=True)
+
+    assert result.status == "failed"
+    assert "blocked local or private address" in result.error
+
+
+@pytest.mark.asyncio
 async def test_github_stdio_mcp_server_lists_and_calls_tools(tmp_path: Path) -> None:
     server_script = tmp_path / "github_mcp_server.py"
     server_script.write_text(
@@ -191,6 +259,7 @@ while True:
                     name="github",
                     command=sys.executable,
                     args=[str(server_script)],
+                    stdio_framing="content-length",
                 )
             ]
         )
@@ -202,6 +271,62 @@ while True:
     assert tools[0]["server_name"] == "github"
     assert tools[0]["name"] == "search_repositories"
     assert result["content"][0]["text"] == "github mcp called search_repositories"
+
+
+@pytest.mark.asyncio
+async def test_jsonl_stdio_mcp_server_lists_tools(tmp_path: Path) -> None:
+    server_script = tmp_path / "jsonl_mcp_server.py"
+    server_script.write_text(
+        """
+import json
+import sys
+
+
+for line in sys.stdin:
+    message = json.loads(line)
+    request_id = message.get("id")
+    if request_id is None:
+        continue
+    if message.get("method") == "initialize":
+        print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": {"capabilities": {}}}), flush=True)
+    elif message.get("method") == "tools/list":
+        print(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "tools": [
+                            {
+                                "name": "fetch",
+                                "description": "Fetch a URL.",
+                                "inputSchema": {"type": "object"},
+                            }
+                        ]
+                    },
+                }
+            ),
+            flush=True,
+        )
+""",
+        encoding="utf-8",
+    )
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="fetch",
+                    command=sys.executable,
+                    args=[str(server_script)],
+                )
+            ]
+        )
+    )
+
+    tools = await client.list_tools()
+
+    assert tools[0]["server_name"] == "fetch"
+    assert tools[0]["name"] == "fetch"
 
 
 @pytest.mark.asyncio

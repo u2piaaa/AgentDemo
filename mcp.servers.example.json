@@ -1,5 +1,17 @@
 {
   "servers": {
+    "fetch": {
+      "enabled": true,
+      "transport": "stdio",
+      "command": "backend\\.venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "mcp_server_fetch"
+      ],
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      }
+    },
     "github": {
       "enabled": false,
       "transport": "stdio",

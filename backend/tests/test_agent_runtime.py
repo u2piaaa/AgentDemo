@@ -97,6 +97,8 @@ class FakeGateway:
         joined_context = "\n".join(context)
         if "failed with status" in joined_context:
             text = "I could not read the file, so I cannot summarize it."
+        elif "Fetched web page content" in joined_context:
+            text = "The page says Example Domain. Source: https://example.com."
         elif "Web search results" in joined_context:
             text = "Search says the current result is available at https://example.com/news."
         elif "AgentDemo" in joined_context:
@@ -220,6 +222,44 @@ async def make_mcp_registry() -> UnifiedToolRegistry:
                         {
                             "name": "tool_planning",
                             "messages": [{"role": "user", "content": "prompt from MCP"}],
+                        }
+                    ],
+                )
+            ]
+        )
+    )
+    registry = UnifiedToolRegistry(PluginRegistry(Path(".")), client)
+    await registry.refresh_mcp_tools()
+    return registry
+
+
+async def make_mcp_fetch_registry() -> UnifiedToolRegistry:
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="fetch",
+                    tools=[
+                        {
+                            "name": "fetch",
+                            "description": "Fetches a URL from the internet.",
+                            "inputSchema": {
+                                "type": "object",
+                                "required": ["url"],
+                                "properties": {
+                                    "url": {"type": "string"},
+                                    "max_length": {"type": "integer"},
+                                },
+                            },
+                            "mock_result": {
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "# Example Domain\n\nThis domain is for examples.",
+                                    }
+                                ],
+                                "url": "https://example.com",
+                            },
                         }
                     ],
                 )
@@ -405,6 +445,60 @@ async def test_web_search_request_triggers_tool_and_influences_answer() -> None:
     assert tool_result["status"] == "success"
     assert "Web search results" in "\n".join(gateway.stream_calls[0]["context"])
     assert "https://example.com/news" in assistant_messages(session)[0].content
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_summary_uses_mcp_fetch_instead_of_web_search() -> None:
+    session = FakeSession()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=await make_mcp_fetch_registry(),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "Please summarize this page https://example.com")
+
+    tool_call = next(data for name, data in events if name == "tool_call")
+    tool_result = next(data for name, data in events if name == "tool_result")
+    assert tool_call["tool_name"] == "mcp.fetch.fetch"
+    assert tool_call["provider"] == "mcp_server"
+    assert tool_call["server_name"] == "fetch"
+    assert tool_call["arguments"] == {"url": "https://example.com", "max_length": 8000}
+    assert tool_call["requires_confirmation"] is True
+    assert tool_result["status"] == "failed"
+    assert tool_result["error"] == "Tool requires confirmation before execution"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_mcp_fetch_result_enters_final_answer_context() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=await make_mcp_fetch_registry(),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+    await collect_events(runtime, "Please summarize this page https://example.com")
+    conversation_id = next(item.id for item in session.items if isinstance(item, Conversation))
+
+    confirmed_events = []
+    async for event in runtime.stream_confirmed_tool(
+        ToolConfirmationRequest(
+            conversation_id=conversation_id,
+            message="Please summarize this page https://example.com",
+            tool_name="mcp.fetch.fetch",
+            arguments={"url": "https://example.com", "max_length": 8000},
+            reason="User confirmed the network fetch.",
+        )
+    ):
+        confirmed_events.append((event["event"], json.loads(event["data"])))
+
+    tool_result = next(data for name, data in confirmed_events if name == "tool_result")
+    assert tool_result["status"] == "success"
+    assert "# Example Domain" in "\n".join(gateway.stream_calls[-1]["context"])
+    assert "Source: https://example.com" in assistant_messages(session)[-1].content
 
 
 @pytest.mark.asyncio
