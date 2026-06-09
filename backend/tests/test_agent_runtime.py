@@ -471,6 +471,45 @@ async def test_fetch_url_summary_uses_mcp_fetch_instead_of_web_search() -> None:
 
 
 @pytest.mark.asyncio
+async def test_url_with_news_path_uses_mcp_fetch_not_web_search() -> None:
+    runtime = AgentRuntime(
+        session=FakeSession(),
+        plugin_registry=await make_mcp_fetch_registry(),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(
+        runtime,
+        "https://www.163.com/news/article/KV0D6R24000189FH.html",
+    )
+
+    tool_call = next(data for name, data in events if name == "tool_call")
+    assert tool_call["tool_name"] == "mcp.fetch.fetch"
+    assert tool_call["arguments"]["url"] == (
+        "https://www.163.com/news/article/KV0D6R24000189FH.html"
+    )
+
+
+@pytest.mark.asyncio
+async def test_runtime_answers_fetch_mcp_tool_availability() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=await make_mcp_fetch_registry(),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "Do you have fetch MCP tool?")
+
+    assert next(data for name, data in events if name == "plan")["no_tool"] is True
+    assert "mcp.fetch.fetch" in assistant_messages(session)[0].content
+    assert gateway.stream_calls == []
+
+
+@pytest.mark.asyncio
 async def test_confirmed_mcp_fetch_result_enters_final_answer_context() -> None:
     session = FakeSession()
     gateway = FakeGateway()

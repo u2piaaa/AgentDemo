@@ -274,7 +274,9 @@ class AgentRuntime:
                 return "\u5f53\u524d\u6ca1\u6709\u5df2\u52a0\u8f7d\u7684\u8fd0\u884c\u65f6\u5de5\u5177\u3002"
             return None
 
-        matching_tools = [tool for tool in tools if tool.manifest.name.lower() in lowered]
+        matching_tools = [
+            tool for tool in tools if self._tool_matches_message(tool, lowered)
+        ]
         if matching_tools:
             if not self._requests_tool_inventory(lowered):
                 return None
@@ -306,6 +308,17 @@ class AgentRuntime:
             )
         )
 
+    def _tool_matches_message(self, tool, lowered_message: str) -> bool:
+        identifiers = {
+            tool.manifest.name.lower(),
+            str(tool.provider_tool_id or "").lower(),
+            str(tool.server_name or "").lower(),
+        }
+        if tool.server_name:
+            identifiers.add(f"{tool.server_name.lower()} mcp")
+            identifiers.add(f"mcp {tool.server_name.lower()}")
+        return any(identifier and identifier in lowered_message for identifier in identifiers)
+
     async def _save_assistant_message(self, state: AgentExecutionState, route) -> None:
         if state.conversation_id is None:
             raise RuntimeError("Cannot save assistant message without a conversation")
@@ -335,6 +348,8 @@ class AgentRuntime:
             return AgentToolPlan(no_tool=True, reason="The requested web page has already been fetched.")
         if any(item.get("tool_name") == WEB_SEARCH_TOOL_NAME for item in state.tool_calls):
             return AgentToolPlan(no_tool=True, reason="The web has already been searched.")
+        if self._tool_availability_answer(state.message) is not None:
+            return AgentToolPlan(no_tool=True, reason="The user asked about available tools.")
         path = self._extract_read_file_path(state.message)
         if path is not None and self._requests_file_read(state.message):
             tool = self.plugin_registry.get("read_file") if self.plugin_registry else None
@@ -370,10 +385,12 @@ class AgentRuntime:
 
     def _plan_fetch_tool(self, state: AgentExecutionState) -> AgentToolPlan | None:
         url = self._extract_fetch_url(state.message)
-        if url is None or not self._requests_fetch_url(state.message):
+        if url is None:
             return None
         tool = self.plugin_registry.get(MCP_FETCH_TOOL_NAME) if self.plugin_registry else None
         if tool is None:
+            if not self._requests_fetch_url(state.message):
+                return None
             return AgentToolPlan(
                 no_tool=True,
                 reason="The user asked to read a specific web page, but the fetch MCP tool is not available.",
@@ -565,8 +582,11 @@ class AgentRuntime:
             return None
         return match.group(0).rstrip(".,;:!?)\u3002\uff0c\uff1b\uff1a\uff01\uff1f\uff09\u3011\u300d'\"")
 
+    def _message_without_urls(self, message: str) -> str:
+        return FETCH_URL_RE.sub(" ", message)
+
     def _requests_web_search(self, message: str) -> bool:
-        lowered = message.lower()
+        lowered = self._message_without_urls(message).lower()
         if any(term in lowered for term in WEB_SEARCH_TRIGGER_TERMS):
             return True
         if not any(term in lowered for term in WEB_SEARCH_CURRENT_TERMS):
