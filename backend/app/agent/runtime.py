@@ -2,11 +2,13 @@ from collections.abc import AsyncIterator
 from dataclasses import asdict
 import json
 import re
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.graph import build_agent_graph
+from app.agent.state import AgentGraphState
 from app.core.config import get_settings
 from app.core.mcp_security import McpIdentity
 from app.models.conversation import Conversation, MemorySummary, Message
@@ -65,22 +67,84 @@ class AgentRuntime:
         self.settings = get_settings()
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[dict[str, str]]:
-        state = AgentExecutionState(user_id=self.user_id, message=request.message)
+        trace_id = uuid4().hex
+        state: AgentGraphState = {
+            "user_id": self.user_id,
+            "conversation_id": request.conversation_id,
+            "message": request.message,
+            "task_type": request.task_type,
+            "history": [],
+            "memory_summaries": [],
+            "citations": [],
+            "mcp_resources": [],
+            "mcp_prompts": [],
+            "plan": AgentToolPlan(),
+            "tool_calls": [],
+            "observations": [],
+            "final_answer": "",
+            "trace_id": trace_id,
+            "tool_rounds": 0,
+            "max_tool_rounds": self.max_tool_rounds,
+            "save_user_message": True,
+            "events": [],
+        }
         try:
-            async for event in self._execute(request, state):
+            graph = build_agent_graph(self, mode="chat")
+            config = self._graph_config(state)
+            async for event in graph.astream(state, config=config, stream_mode="custom"):
                 yield event
         except Exception as exc:
-            yield self._event("error", {"message": str(exc), "trace_id": state.trace_id})
+            yield self._event("error", {"message": str(exc), "trace_id": trace_id})
 
     async def stream_confirmed_tool(
         self, request: ToolConfirmationRequest
     ) -> AsyncIterator[dict[str, str]]:
-        state = AgentExecutionState(user_id=self.user_id, message=request.message)
+        trace_id = uuid4().hex
+        state: AgentGraphState = {
+            "user_id": self.user_id,
+            "conversation_id": request.conversation_id,
+            "message": request.message,
+            "task_type": request.task_type,
+            "history": [],
+            "memory_summaries": [],
+            "citations": [],
+            "mcp_resources": [],
+            "mcp_prompts": [],
+            "plan": AgentToolPlan(),
+            "tool_calls": [],
+            "observations": [],
+            "final_answer": "",
+            "trace_id": trace_id,
+            "tool_rounds": 0,
+            "max_tool_rounds": self.max_tool_rounds,
+            "save_user_message": False,
+            "confirmed_tool_name": request.tool_name,
+            "confirmed_arguments": request.arguments,
+            "confirmed_reason": request.reason,
+            "events": [],
+        }
         try:
-            async for event in self._execute_confirmed_tool(request, state):
+            graph = build_agent_graph(self, mode="confirmed_tool")
+            config = self._graph_config(state)
+            async for event in graph.astream(state, config=config, stream_mode="custom"):
                 yield event
         except Exception as exc:
-            yield self._event("error", {"message": str(exc), "trace_id": state.trace_id})
+            yield self._event("error", {"message": str(exc), "trace_id": trace_id})
+
+    def _graph_config(self, state: AgentGraphState) -> dict:
+        conversation_id = state.get("conversation_id")
+        if conversation_id is None:
+            return {}
+        return {"configurable": {"thread_id": str(conversation_id)}}
+
+    async def _ensure_conversation_from_state(self, state: AgentGraphState) -> Conversation:
+        return await self._ensure_conversation(
+            ChatRequest(
+                conversation_id=state.get("conversation_id"),
+                message=state["message"],
+                task_type=state.get("task_type", "conversation"),
+            )
+        )
 
     async def _execute(
         self, request: ChatRequest, state: AgentExecutionState
@@ -559,6 +623,8 @@ class AgentRuntime:
         conversation = Conversation(title="New conversation", user_id=self.user_id)
         self.session.add(conversation)
         await self.session.flush()
+        if conversation.id is None:
+            conversation.id = uuid4()
         return conversation
 
     async def _load_recent_history(self, conversation_id: UUID) -> list[dict[str, str]]:
