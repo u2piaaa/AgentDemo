@@ -255,7 +255,11 @@ async def make_mcp_fetch_registry() -> UnifiedToolRegistry:
                                 "content": [
                                     {
                                         "type": "text",
-                                        "text": "# Example Domain\n\nThis domain is for examples.",
+                                        "text": (
+                                            "# Example Domain\n\n"
+                                            + ("This domain is for examples. " * 40)
+                                            + "Late page detail after summary cutoff."
+                                        ),
                                     }
                                 ],
                                 "url": "https://example.com",
@@ -468,6 +472,8 @@ async def test_fetch_url_summary_uses_mcp_fetch_instead_of_web_search() -> None:
     assert tool_call["requires_confirmation"] is True
     assert tool_result["status"] == "failed"
     assert tool_result["error"] == "Tool requires confirmation before execution"
+    assert "token" not in [name for name, _ in events]
+    assert assistant_messages(session) == []
 
 
 @pytest.mark.asyncio
@@ -536,7 +542,9 @@ async def test_confirmed_mcp_fetch_result_enters_final_answer_context() -> None:
 
     tool_result = next(data for name, data in confirmed_events if name == "tool_result")
     assert tool_result["status"] == "success"
-    assert "# Example Domain" in "\n".join(gateway.stream_calls[-1]["context"])
+    context = "\n".join(gateway.stream_calls[-1]["context"])
+    assert "# Example Domain" in context
+    assert "Late page detail after summary cutoff." in context
     assert "Source: https://example.com" in assistant_messages(session)[-1].content
 
 

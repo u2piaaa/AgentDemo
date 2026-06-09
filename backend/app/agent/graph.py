@@ -40,7 +40,11 @@ def build_agent_graph(runtime, mode: GraphMode = "chat"):
             _route_after_plan,
             {"execute_tool": "execute_tool", "generate_answer": "generate_answer"},
         )
-        graph.add_edge("execute_tool", "plan")
+        graph.add_conditional_edges(
+            "execute_tool",
+            _route_after_execute_tool,
+            {"plan": "plan", "update_memory_summary": "update_memory_summary"},
+        )
 
     graph.add_edge("generate_answer", "save_assistant_message")
     graph.add_edge("save_assistant_message", "update_memory_summary")
@@ -53,3 +57,19 @@ def _route_after_plan(state: AgentGraphState) -> str:
     if plan is None or plan.no_tool:
         return "generate_answer"
     return "execute_tool"
+
+
+def _route_after_execute_tool(state: AgentGraphState) -> str:
+    tool_calls = state.get("tool_calls", [])
+    if not tool_calls:
+        return "plan"
+    latest = tool_calls[-1]
+    result = latest.get("result") if isinstance(latest, dict) else None
+    if (
+        isinstance(result, dict)
+        and latest.get("requires_confirmation") is True
+        and result.get("status") == "failed"
+        and result.get("error") == "Tool requires confirmation before execution"
+    ):
+        return "update_memory_summary"
+    return "plan"
