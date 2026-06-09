@@ -551,9 +551,7 @@ class AgentRuntime:
 
     def _format_tool_observation(self, result: ToolRunResponse) -> str:
         if result.status == "success":
-            output = result.output_summary
-            if output is None:
-                output = json.dumps(result.output, ensure_ascii=False, default=str)
+            output = self._tool_output_text(result)
             if result.tool_name == WEB_SEARCH_TOOL_NAME:
                 return (
                     "Web search results. Use these results for current external facts and cite "
@@ -571,6 +569,17 @@ class AgentRuntime:
                 )
             return f"{result.tool_name} succeeded: {output}"
         return f"{result.tool_name} failed with status {result.status}: {result.error}"
+
+    def _tool_output_text(self, result: ToolRunResponse) -> str:
+        if isinstance(result.output, dict):
+            content = result.output.get("content")
+            if isinstance(content, str):
+                return content
+        if isinstance(result.output, str):
+            return result.output
+        if result.output is not None:
+            return json.dumps(result.output, ensure_ascii=False, default=str)
+        return result.output_summary or ""
 
     def _requests_fetch_url(self, message: str) -> bool:
         lowered = message.lower()
