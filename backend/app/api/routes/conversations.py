@@ -114,7 +114,7 @@ async def chat_stream(
 
     runtime = AgentRuntime(
         session=session,
-        plugin_registry=request.app.state.plugin_registry,
+        plugin_registry=request.app.state.tool_registry,
         user_id=current_user.id,
     )
     return EventSourceResponse(runtime.stream(payload))
@@ -133,7 +133,7 @@ async def confirm_tool_stream(
 
     runtime = AgentRuntime(
         session=session,
-        plugin_registry=request.app.state.plugin_registry,
+        plugin_registry=request.app.state.tool_registry,
         user_id=current_user.id,
     )
     return EventSourceResponse(runtime.stream_confirmed_tool(payload))
