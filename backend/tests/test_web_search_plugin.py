@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import httpx
 import pytest
 
 from app.core.config import get_settings
@@ -105,6 +106,37 @@ def test_tavily_provider_parses_results(reset_web_search_settings, monkeypatch) 
     assert payload["provider"] == "tavily"
     assert payload["results"][0]["url"] == "https://example.com/result"
     assert payload["results"][0]["snippet"] == "Result content"
+
+
+def test_web_search_wraps_http_errors_with_configuration_hint(
+    reset_web_search_settings, monkeypatch
+) -> None:
+    class FakeClient:
+        def __init__(self, timeout: int) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def post(self, url: str, json: dict, headers: dict) -> None:
+            raise httpx.ConnectError(
+                "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol"
+            )
+
+    reset_web_search_settings.web_search_provider = "tavily"
+    reset_web_search_settings.web_search_api_key = "tvly-test"
+    monkeypatch.setattr("app.services.web_search.httpx.Client", FakeClient)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        search_web("latest AI news", settings=reset_web_search_settings)
+
+    message = str(exc_info.value)
+    assert "Web search request failed for provider 'tavily'" in message
+    assert "UNEXPECTED_EOF_WHILE_READING" in message
+    assert "WEB_SEARCH_BASE_URL" in message
 
 
 @pytest.mark.asyncio
