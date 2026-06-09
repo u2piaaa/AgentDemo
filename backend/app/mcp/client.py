@@ -82,7 +82,14 @@ class McpClientManager:
         for server in servers:
             server_resources = server.resources
             if not server_resources and self._can_call_stdio(server):
-                server_resources = await self._stdio_result_list(server, "resources/list", "resources")
+                try:
+                    server_resources = await self._stdio_result_list(
+                        server, "resources/list", "resources"
+                    )
+                except RuntimeError as exc:
+                    if not self._is_method_not_found(exc):
+                        raise
+                    server_resources = []
             resources.extend(
                 {"server_name": server.name, "transport": server.transport, **resource}
                 for resource in server_resources
@@ -104,7 +111,14 @@ class McpClientManager:
         for server in servers:
             server_prompts = server.prompts
             if not server_prompts and self._can_call_stdio(server):
-                server_prompts = await self._stdio_result_list(server, "prompts/list", "prompts")
+                try:
+                    server_prompts = await self._stdio_result_list(
+                        server, "prompts/list", "prompts"
+                    )
+                except RuntimeError as exc:
+                    if not self._is_method_not_found(exc):
+                        raise
+                    server_prompts = []
             prompts.extend(
                 {"server_name": server.name, "transport": server.transport, **prompt}
                 for prompt in server_prompts
@@ -272,3 +286,7 @@ class McpClientManager:
         except TimeoutError:
             process.terminate()
             await process.wait()
+
+    def _is_method_not_found(self, exc: RuntimeError) -> bool:
+        message = str(exc)
+        return "-32601" in message or "Method not found" in message

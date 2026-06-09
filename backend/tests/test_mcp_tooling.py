@@ -330,6 +330,50 @@ for line in sys.stdin:
 
 
 @pytest.mark.asyncio
+async def test_unsupported_optional_stdio_capabilities_return_empty_lists(tmp_path: Path) -> None:
+    server_script = tmp_path / "tools_only_mcp_server.py"
+    server_script.write_text(
+        """
+import json
+import sys
+
+
+for line in sys.stdin:
+    message = json.loads(line)
+    request_id = message.get("id")
+    if request_id is None:
+        continue
+    method = message.get("method")
+    if method == "initialize":
+        result = {"capabilities": {"tools": {}}}
+        print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}), flush=True)
+    elif method == "tools/list":
+        result = {"tools": [{"name": "fetch", "inputSchema": {"type": "object"}}]}
+        print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}), flush=True)
+    else:
+        error = {"code": -32601, "message": "Method not found"}
+        print(json.dumps({"jsonrpc": "2.0", "id": request_id, "error": error}), flush=True)
+""",
+        encoding="utf-8",
+    )
+    client = McpClientManager(
+        McpConfig(
+            servers=[
+                McpServerConfig(
+                    name="fetch",
+                    command=sys.executable,
+                    args=[str(server_script)],
+                )
+            ]
+        )
+    )
+
+    assert [tool["name"] for tool in await client.list_tools()] == ["fetch"]
+    assert await client.list_resources() == []
+    assert await client.list_prompts() == []
+
+
+@pytest.mark.asyncio
 async def test_unified_registry_lists_local_and_mcp_tools() -> None:
     plugin_registry = PluginRegistry(Path("."))
     plugin_registry.register_tool(make_local_tool())
