@@ -270,6 +270,17 @@ function hasVisibleTraceSteps(trace: ExecutionTrace | undefined): trace is Execu
   return Boolean(trace?.statuses?.length || trace?.plans.length || trace?.toolCalls.length || trace?.error);
 }
 
+function hasPendingConfirmation(trace: ExecutionTrace | undefined): boolean {
+  return Boolean(
+    trace?.toolCalls.some(
+      (tool) =>
+        tool.requires_confirmation &&
+        tool.status === "blocked" &&
+        tool.error === "Tool requires confirmation before execution"
+    )
+  );
+}
+
 function traceFromDoneEvent(data: Extract<StreamEvent, { event: "done" }>["data"]): ExecutionTrace {
   const toolCalls = normalizePersistedToolCalls(data.tool_calls);
   const plans = normalizePersistedPlans(data.tool_calls);
@@ -825,16 +836,22 @@ export function App() {
     }
     if (event.event === "done") {
       const conversationId = event.data.conversation_id;
+      const liveTrace = executionTraceRef.current[assistantMessageId];
+      const awaitingConfirmation = hasPendingConfirmation(liveTrace);
       setActiveConversationId(conversationId);
       setCitations(event.data.citations);
-      setStatus("Done");
+      setStatus(awaitingConfirmation ? "Waiting for tool confirmation" : "Done");
       void getConversations().then(async (items) => {
         setConversations(items);
-        const loadedMessages = await getMessages(conversationId);
         const loadedDocuments = await getDocuments(conversationId);
+        if (awaitingConfirmation) {
+          setDocuments(loadedDocuments);
+          void getTasks(conversationId).then(setTasks).catch(() => undefined);
+          return;
+        }
+        const loadedMessages = await getMessages(conversationId);
         const persistedAssistant = [...loadedMessages].reverse().find((message) => message.role === "assistant");
         if (persistedAssistant) {
-          const liveTrace = executionTraceRef.current[assistantMessageId];
           const finalTrace = hasVisibleTraceSteps(liveTrace) ? liveTrace : traceFromDoneEvent(event.data);
           executionTraceRef.current = {
             ...executionTraceRef.current,
