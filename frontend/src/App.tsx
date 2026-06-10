@@ -396,6 +396,7 @@ export function App() {
   const [executionTraces, setExecutionTraces] = useState<Record<string, ExecutionTrace>>({});
   const [confirmationDecisions, setConfirmationDecisions] = useState<Record<string, ConfirmationDecision>>({});
   const executionTraceRef = useRef<Record<string, ExecutionTrace>>({});
+  const pendingConfirmationConversationRef = useRef<string | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -450,6 +451,9 @@ export function App() {
   }, [currentUser]);
 
   useEffect(() => {
+    if (isStreaming) {
+      return;
+    }
     if (!activeConversationId) {
       setMessages([]);
       setDocuments([]);
@@ -461,7 +465,10 @@ export function App() {
       setUploadStatus("No document uploaded in this chat.");
       return;
     }
-    if (isStreaming) {
+    if (
+      pendingConfirmationConversationRef.current === activeConversationId &&
+      Object.values(executionTraceRef.current).some(hasPendingConfirmation)
+    ) {
       return;
     }
     Promise.all([getMessages(activeConversationId), getDocuments(activeConversationId)]).then(
@@ -703,6 +710,7 @@ export function App() {
   }
 
   function handleCancelTool(toolId: string) {
+    pendingConfirmationConversationRef.current = null;
     setConfirmationDecisions((current) => ({ ...current, [toolId]: "cancelled" }));
     setExecutionTraces((current) => {
       const next: Record<string, ExecutionTrace> = {};
@@ -737,6 +745,7 @@ export function App() {
       return;
     }
 
+    pendingConfirmationConversationRef.current = null;
     const assistantMessageId = makeClientId("assistant-confirmed");
     setConfirmationDecisions((current) => ({ ...current, [tool.id]: "confirmed" }));
     setIsStreaming(true);
@@ -841,6 +850,7 @@ export function App() {
       setActiveConversationId(conversationId);
       setCitations(event.data.citations);
       setStatus(awaitingConfirmation ? "Waiting for tool confirmation" : "Done");
+      pendingConfirmationConversationRef.current = awaitingConfirmation ? conversationId : null;
       void getConversations().then(async (items) => {
         setConversations(items);
         const loadedDocuments = await getDocuments(conversationId);
