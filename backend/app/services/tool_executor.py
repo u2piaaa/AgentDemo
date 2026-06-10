@@ -98,6 +98,19 @@ class ToolExecutor:
             return response
 
         limited_output = self._limit_output(tool, output)
+        if self._is_mcp_error_output(limited_output):
+            response = self._response(
+                tool,
+                "failed",
+                started,
+                trace_id,
+                output=limited_output,
+                error=self._mcp_error_text(limited_output),
+            )
+            await self._record_audit(
+                session, tool, arguments, response, user_id, conversation_id, task_id
+            )
+            return response
         response = self._response(tool, "success", started, trace_id, output=limited_output)
         await self._record_audit(session, tool, arguments, response, user_id, conversation_id, task_id)
         return response
@@ -228,6 +241,32 @@ class ToolExecutor:
                 text = str(output)
         max_chars = min(self.settings.max_tool_output_chars, 500)
         return text[:max_chars]
+
+    def _is_mcp_error_output(self, output: Any) -> bool:
+        if not isinstance(output, dict):
+            return False
+        raw = output.get("raw")
+        if isinstance(raw, Mapping) and raw.get("isError") is True:
+            return True
+        return output.get("isError") is True
+
+    def _mcp_error_text(self, output: Any) -> str:
+        if isinstance(output, dict):
+            content = output.get("content")
+            if isinstance(content, str) and content:
+                return content
+            raw = output.get("raw")
+            if isinstance(raw, Mapping):
+                raw_content = raw.get("content")
+                if isinstance(raw_content, list):
+                    parts = [
+                        str(item.get("text"))
+                        for item in raw_content
+                        if isinstance(item, Mapping) and item.get("text")
+                    ]
+                    if parts:
+                        return "\n".join(parts)
+        return "MCP tool returned an error result"
 
     async def _record_audit(
         self,
