@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.core.config import get_settings
-from app.services.plugin_registry import PluginManifest, RegisteredTool
+from app.services.plugin_registry import TOOL_PROVIDER_MCP_SERVER, PluginManifest, RegisteredTool
 from app.services.tool_executor import ToolExecutor
 
 
@@ -29,6 +29,37 @@ def make_tool(
         timeout_seconds=timeout_seconds,
     )
     return RegisteredTool(manifest=manifest, handler=handler, base_dir=Path("."))
+
+
+class FakeMcpClient:
+    async def call_tool(self, server_name: str, tool_name: str, arguments: dict):
+        return {
+            "content": [{"type": "text", "text": "remote fetch failed"}],
+            "isError": True,
+        }
+
+
+def make_mcp_tool() -> RegisteredTool:
+    manifest = PluginManifest(
+        name="mcp.fetch.fetch",
+        description="Fetch a URL.",
+        permission="network",
+        parameters={
+            "type": "object",
+            "required": ["url"],
+            "properties": {"url": {"type": "string"}},
+        },
+        entrypoint="mcp:call_tool",
+    )
+    return RegisteredTool(
+        manifest=manifest,
+        handler=None,
+        base_dir=Path("."),
+        provider=TOOL_PROVIDER_MCP_SERVER,
+        provider_tool_id="fetch",
+        server_name="fetch",
+        client=FakeMcpClient(),
+    )
 
 
 def validate(arguments: dict, parameters: dict) -> None:
@@ -178,6 +209,19 @@ async def test_tool_run_returns_failed_for_handler_exception() -> None:
     assert result.status == "failed"
     assert result.error == "boom"
     assert result.duration_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_mcp_is_error_result_returns_failed_status() -> None:
+    result = await ToolExecutor().run(
+        make_mcp_tool(),
+        {"url": "https://example.com"},
+        confirmed=True,
+    )
+
+    assert result.status == "failed"
+    assert result.error == "remote fetch failed"
+    assert result.output["content"] == "remote fetch failed"
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,12 @@ from app.models.conversation import Conversation, MemorySummary, Message
 from app.models.tool import ToolCall
 from app.schemas import AgentToolPlan, ChatRequest, ToolConfirmationRequest
 from app.services.model_gateway import ModelRoute, StructuredToolPlan
-from app.services.plugin_registry import PluginManifest, PluginRegistry, RegisteredTool
+from app.services.plugin_registry import (
+    TOOL_PROVIDER_MCP_SERVER,
+    PluginManifest,
+    PluginRegistry,
+    RegisteredTool,
+)
 
 
 class ScalarResult:
@@ -95,7 +100,11 @@ class FakeGateway:
             }
         )
         joined_context = "\n".join(context)
-        if "failed with status" in joined_context:
+        if "All search result page fetches failed" in joined_context:
+            text = "Search snippets are available, but page-body fetching failed. Source: https://example.com/news."
+        elif "Fetched content:" in joined_context:
+            text = "Fetched search page content says AI investment is rising. Source: https://example.com/news."
+        elif "failed with status" in joined_context:
             text = "I could not read the file, so I cannot summarize it."
         elif "GitHub repository content" in joined_context:
             text = "GitHub MCP returned repository content from https://github.com/u2piaaa/AgentDemo."
@@ -120,19 +129,45 @@ class FakeGateway:
 
 
 class FakeRegistry:
-    def __init__(self, tool: RegisteredTool | list[RegisteredTool] | None) -> None:
+    def __init__(
+        self,
+        tool: RegisteredTool | list[RegisteredTool] | None,
+        mcp_client=None,
+    ) -> None:
         if isinstance(tool, list):
             self.tools = {item.manifest.name: item for item in tool}
         elif tool is None:
             self.tools = {}
         else:
             self.tools = {tool.manifest.name: tool}
+        self.mcp_client = mcp_client
 
     def get(self, name: str) -> RegisteredTool | None:
         return self.tools.get(name)
 
     def list_tools(self) -> list[RegisteredTool]:
         return list(self.tools.values())
+
+
+class EmptyNamedMcpClient:
+    async def list_resources(self):
+        return [{"server_name": "fetch", "uri": "", "name": ""}]
+
+    async def read_resource(self, server_name: str, uri: str):
+        raise AssertionError("empty MCP resource names must not be read")
+
+    async def list_prompts(self):
+        return [
+            {"server_name": "fetch", "name": ""},
+            {
+                "server_name": "fetch",
+                "name": "fetch",
+                "arguments": [{"name": "url", "required": True}],
+            },
+        ]
+
+    async def get_prompt(self, server_name: str, name: str):
+        raise AssertionError("empty MCP prompt names must not be loaded")
 
 
 def make_read_file_tool(handler, requires_confirmation: bool = False) -> RegisteredTool:
@@ -173,6 +208,54 @@ def make_web_search_tool(handler, requires_confirmation: bool = False) -> Regist
     return RegisteredTool(manifest=manifest, handler=handler, base_dir=Path("."))
 
 
+class FakeFetchMcpClient:
+    def __init__(self, failures: set[str] | None = None) -> None:
+        self.failures = failures or set()
+        self.calls: list[dict] = []
+
+    async def call_tool(self, server_name: str, provider_tool_id: str, arguments: dict):
+        self.calls.append(dict(arguments))
+        url = str(arguments.get("url") or "")
+        if url in self.failures:
+            raise RuntimeError(f"fetch failed for {url}")
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"# Page for {url}\n\nFetched body content for {url}.",
+                }
+            ],
+            "url": url,
+        }
+
+
+def make_mcp_fetch_tool(client: FakeFetchMcpClient | None = None) -> RegisteredTool:
+    manifest = PluginManifest(
+        name="mcp.fetch.fetch",
+        description="Fetches a URL from the internet.",
+        permission="network",
+        requires_confirmation=True,
+        parameters={
+            "type": "object",
+            "required": ["url"],
+            "properties": {
+                "url": {"type": "string"},
+                "max_length": {"type": "integer"},
+            },
+        },
+        entrypoint="mcp:call_tool",
+    )
+    return RegisteredTool(
+        manifest=manifest,
+        handler=None,
+        base_dir=Path("."),
+        provider=TOOL_PROVIDER_MCP_SERVER,
+        provider_tool_id="fetch",
+        server_name="fetch",
+        client=client or FakeFetchMcpClient(),
+    )
+
+
 def successful_read_file(path: str) -> dict[str, str | int]:
     return {"path": path, "chars": 24, "content": "AgentDemo runtime README"}
 
@@ -196,6 +279,18 @@ def successful_web_search(query: str, max_results: int | None = None, recency_da
         ],
         "recency_days": recency_days,
     }
+
+
+def web_search_with_results(results: list[dict]):
+    def handler(query: str, max_results: int | None = None, recency_days: int | None = None):
+        return {
+            "query": query,
+            "provider": "mock",
+            "results": results,
+            "recency_days": recency_days,
+        }
+
+    return handler
 
 
 async def make_mcp_registry() -> UnifiedToolRegistry:
@@ -548,6 +643,150 @@ async def test_web_search_request_triggers_tool_and_influences_answer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_web_search_enriches_results_with_mcp_fetch_content() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    fetch_client = FakeFetchMcpClient()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(
+            [
+                make_web_search_tool(successful_web_search),
+                make_mcp_fetch_tool(fetch_client),
+            ]
+        ),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "web search today's AI news and summarize trends")
+
+    tool_calls = [data for name, data in events if name == "tool_call"]
+    tool_results = [data for name, data in events if name == "tool_result"]
+    assert [item["tool_name"] for item in tool_calls] == ["web_search", "mcp.fetch.fetch"]
+    assert tool_calls[1]["arguments"] == {"url": "https://example.com/news", "max_length": 8000}
+    assert tool_calls[1]["requires_confirmation"] is False
+    assert tool_calls[1]["search_enrichment"] is True
+    assert [item["status"] for item in tool_results] == ["success", "success"]
+    context = "\n".join(gateway.stream_calls[-1]["context"])
+    assert "Web search results" in context
+    assert "Search result page content" in context
+    assert "# Page for https://example.com/news" in context
+    assert "Source: https://example.com/news" in assistant_messages(session)[0].content
+
+
+@pytest.mark.asyncio
+async def test_web_search_fetch_enrichment_limits_and_deduplicates_urls() -> None:
+    fetch_client = FakeFetchMcpClient()
+    results = [
+        {"title": "one", "url": "https://example.com/one", "snippet": "first"},
+        {"title": "duplicate", "url": "https://example.com/one", "snippet": "dupe"},
+        {"title": "empty", "url": "", "snippet": "skip"},
+        {"title": "ftp", "url": "ftp://example.com/file", "snippet": "skip"},
+        {"title": "two", "url": "https://example.com/two", "snippet": "second"},
+        {"title": "three", "url": "https://example.com/three", "snippet": "third"},
+        {"title": "four", "url": "https://example.com/four", "snippet": "fourth"},
+    ]
+    runtime = AgentRuntime(
+        session=FakeSession(),
+        plugin_registry=FakeRegistry(
+            [
+                make_web_search_tool(web_search_with_results(results)),
+                make_mcp_fetch_tool(fetch_client),
+            ]
+        ),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    await collect_events(runtime, "web search latest AI funding news")
+
+    assert [item["url"] for item in fetch_client.calls] == [
+        "https://example.com/one",
+        "https://example.com/two",
+        "https://example.com/three",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_web_search_without_fetch_mcp_falls_back_to_search_results() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    await collect_events(runtime, "web search today's AI news")
+
+    context = "\n".join(gateway.stream_calls[-1]["context"])
+    assert "Web search results" in context
+    assert "Search result page content was not fetched because the Fetch MCP tool" in context
+    assert "Search says the current result is available" in assistant_messages(session)[0].content
+
+
+@pytest.mark.asyncio
+async def test_web_search_fetch_failure_continues_with_other_results() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    fetch_client = FakeFetchMcpClient(failures={"https://example.com/fail"})
+    results = [
+        {"title": "failed", "url": "https://example.com/fail", "snippet": "first"},
+        {"title": "ok", "url": "https://example.com/news", "snippet": "second"},
+    ]
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(
+            [
+                make_web_search_tool(web_search_with_results(results)),
+                make_mcp_fetch_tool(fetch_client),
+            ]
+        ),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "web search today's AI news")
+
+    fetch_results = [
+        data for name, data in events if name == "tool_result" and data["tool_name"] == "mcp.fetch.fetch"
+    ]
+    assert [item["status"] for item in fetch_results] == ["failed", "success"]
+    context = "\n".join(gateway.stream_calls[-1]["context"])
+    assert "Search result page fetch failed" in context
+    assert "# Page for https://example.com/news" in context
+    assert "Source: https://example.com/news" in assistant_messages(session)[0].content
+
+
+@pytest.mark.asyncio
+async def test_web_search_all_fetch_failures_fall_back_to_search_snippets() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    fetch_client = FakeFetchMcpClient(failures={"https://example.com/news"})
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(
+            [
+                make_web_search_tool(successful_web_search),
+                make_mcp_fetch_tool(fetch_client),
+            ]
+        ),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    await collect_events(runtime, "web search today's AI news")
+
+    context = "\n".join(gateway.stream_calls[-1]["context"])
+    assert "Web search results" in context
+    assert "All search result page fetches failed" in context
+    assert "page-body fetching failed" in assistant_messages(session)[0].content
+    assert "https://example.com/news" in assistant_messages(session)[0].content
+
+
+@pytest.mark.asyncio
 async def test_huggingface_model_search_plans_mcp_before_web_search() -> None:
     session = FakeSession()
     runtime = AgentRuntime(
@@ -895,6 +1134,24 @@ async def test_mcp_resource_and_prompt_enter_answer_context() -> None:
     assert "prompt from MCP" in context
     done = events[-1][1]
     assert done["mcp_resources"][0]["uri"] == "mcp://fake/doc"
+
+
+@pytest.mark.asyncio
+async def test_empty_mcp_resource_and_prompt_names_do_not_match_every_message() -> None:
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=FakeSession(),
+        plugin_registry=FakeRegistry(None, mcp_client=EmptyNamedMcpClient()),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "hello without mcp references; fetch is just a word")
+
+    assert next(data for name, data in events if name == "plan")["no_tool"] is True
+    context = "\n".join(gateway.stream_calls[0]["context"])
+    assert "MCP resource" not in context
+    assert "MCP prompt" not in context
 
 
 @pytest.mark.asyncio

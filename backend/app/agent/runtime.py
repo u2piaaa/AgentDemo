@@ -31,6 +31,7 @@ MCP_GITHUB_SERVER_NAME = "github"
 MCP_GITHUB_FILE_TOOL_IDS = ("get_file_contents",)
 MCP_HUGGINGFACE_SERVER_NAME = "huggingface"
 FETCH_DEFAULT_MAX_LENGTH = 8000
+SEARCH_FETCH_MAX_PAGES = 3
 FETCH_URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
 GITHUB_URL_RE = re.compile(r"https?://(?:www\.)?github\.com/[^\s<>\"]+", re.IGNORECASE)
 HUGGINGFACE_URL_RE = re.compile(
@@ -432,13 +433,7 @@ class AgentRuntime:
             provider=tool.provider,
             provider_tool_id=tool.provider_tool_id,
             server_name=tool.server_name,
-            arguments={
-                "url": url,
-                "max_length": max(
-                    1,
-                    min(FETCH_DEFAULT_MAX_LENGTH, self.settings.max_tool_output_chars),
-                ),
-            },
+            arguments={"url": url, "max_length": self._fetch_max_length()},
             reason="The user asked to fetch and summarize a specific web page URL.",
             requires_confirmation=tool.manifest.requires_confirmation,
         )
@@ -571,6 +566,9 @@ class AgentRuntime:
         )
         state.observations.append(self._format_tool_observation(result))
         yield self._event("tool_result", result.model_dump())
+        if result.status == "success" and plan.tool_name == WEB_SEARCH_TOOL_NAME:
+            async for event in self._enrich_web_search_with_fetch(state, result):
+                yield event
 
     async def _execute_tool_plan(self, state: AgentExecutionState) -> ToolRunResponse:
         plan = state.plan
@@ -597,6 +595,85 @@ class AgentRuntime:
             identity=McpIdentity(user_id=state.user_id),
         )
 
+    async def _enrich_web_search_with_fetch(
+        self, state: AgentExecutionState, search_result: ToolRunResponse
+    ) -> AsyncIterator[dict[str, str]]:
+        tool = self.plugin_registry.get(MCP_FETCH_TOOL_NAME) if self.plugin_registry else None
+        if tool is None:
+            state.observations.append(
+                "Search result page content was not fetched because the Fetch MCP tool "
+                f"`{MCP_FETCH_TOOL_NAME}` is not available. Fall back to the web search "
+                "titles, snippets, and source URLs."
+            )
+            return
+
+        targets = self._search_result_fetch_targets(search_result)
+        if not targets:
+            state.observations.append(
+                "Search result page content was not fetched because the web search results "
+                "did not include any unique http/https URLs. Fall back to the search snippets."
+            )
+            return
+
+        successes = 0
+        failures: list[str] = []
+        for target in targets:
+            arguments = {"url": target["url"], "max_length": self._fetch_max_length()}
+            reason = (
+                "Automatically fetching a public web search result page as part of the "
+                "user's explicit search request. This read-only fetch is auto-confirmed "
+                "for the search enrichment step."
+            )
+            yield self._event(
+                "tool_call",
+                {
+                    "tool_name": tool.manifest.name,
+                    "provider": tool.provider,
+                    "provider_tool_id": tool.provider_tool_id,
+                    "server_name": tool.server_name,
+                    "arguments": arguments,
+                    "reason": reason,
+                    "requires_confirmation": False,
+                    "trace_id": state.trace_id,
+                    "search_enrichment": True,
+                },
+            )
+            result = await self.tool_executor.run(
+                tool,
+                arguments,
+                confirmed=True,
+                session=self.session,
+                user_id=state.user_id,
+                conversation_id=state.conversation_id,
+                identity=McpIdentity(user_id=state.user_id),
+            )
+            state.tool_calls.append(
+                {
+                    "tool_name": tool.manifest.name,
+                    "provider": tool.provider,
+                    "provider_tool_id": tool.provider_tool_id,
+                    "server_name": tool.server_name,
+                    "arguments": arguments,
+                    "reason": reason,
+                    "requires_confirmation": False,
+                    "search_enrichment": True,
+                    "result": result.model_dump(),
+                }
+            )
+            if result.status == "success":
+                successes += 1
+            else:
+                failures.append(f"{target['url']}: {result.error or result.status}")
+            state.observations.append(self._format_search_fetch_observation(result, target))
+            yield self._event("tool_result", result.model_dump())
+
+        if successes == 0:
+            detail = "; ".join(failures) if failures else "no fetch attempts completed"
+            state.observations.append(
+                "All search result page fetches failed. Fall back to the web search titles, "
+                f"snippets, and URLs, and explain that page-body fetching failed: {detail}"
+            )
+
     async def _load_mcp_resources_for_context(self, message: str) -> list[dict[str, str]]:
         if self.mcp_client is None:
             return []
@@ -605,7 +682,9 @@ class AgentRuntime:
         for resource in await self.mcp_client.list_resources():
             uri = str(resource.get("uri") or "")
             name = str(resource.get("name") or "")
-            if uri.lower() not in lowered and name.lower() not in lowered:
+            uri_matches = bool(uri) and uri.lower() in lowered
+            name_matches = bool(name) and name.lower() in lowered
+            if not uri_matches and not name_matches:
                 continue
             loaded = await self.mcp_client.read_resource(str(resource["server_name"]), uri)
             selected.append(
@@ -625,7 +704,9 @@ class AgentRuntime:
         selected = []
         for prompt in await self.mcp_client.list_prompts():
             name = str(prompt.get("name") or "")
-            if name.lower() not in lowered:
+            if not name or name.lower() not in lowered:
+                continue
+            if self._mcp_prompt_requires_arguments(prompt):
                 continue
             loaded = await self.mcp_client.get_prompt(str(prompt["server_name"]), name)
             messages = loaded.get("messages") or []
@@ -642,6 +723,15 @@ class AgentRuntime:
                 }
             )
         return selected
+
+    def _mcp_prompt_requires_arguments(self, prompt: dict) -> bool:
+        arguments = prompt.get("arguments") or []
+        if not isinstance(arguments, list):
+            return False
+        return any(
+            isinstance(argument, dict) and argument.get("required") is True
+            for argument in arguments
+        )
 
     def _format_tool_observation(self, result: ToolRunResponse) -> str:
         if result.status == "success":
@@ -686,9 +776,77 @@ class AgentRuntime:
             return json.dumps(result.output, ensure_ascii=False, default=str)
         return result.output_summary or ""
 
+    def _format_search_fetch_observation(
+        self, result: ToolRunResponse, target: dict[str, str]
+    ) -> str:
+        url = target["url"]
+        title = target.get("title") or "(untitled)"
+        snippet = target.get("snippet") or ""
+        if result.status == "success":
+            output = self._tool_output_text(result)
+            return (
+                "Search result page content. This body text was fetched from one of the "
+                "web_search result URLs. Summarize and analyze this body content, compare it "
+                "with the other fetched pages when available, and preserve the source URL.\n"
+                f"Title: {title}\nURL: {url}\nSearch snippet: {snippet}\nFetched content:\n{output}"
+            )
+        return (
+            "Search result page fetch failed. Skip this source if other fetched pages are "
+            "available; if every page fetch failed, fall back to search result snippets and "
+            "explain the body-fetch failure.\n"
+            f"Title: {title}\nURL: {url}\nSearch snippet: {snippet}\n"
+            f"Error: {result.error or result.status}"
+        )
+
     def _requests_fetch_url(self, message: str) -> bool:
         lowered = message.lower()
         return any(term in lowered for term in FETCH_INTENT_TERMS)
+
+    def _fetch_max_length(self) -> int:
+        return max(1, min(FETCH_DEFAULT_MAX_LENGTH, self.settings.max_tool_output_chars))
+
+    def _search_result_fetch_targets(self, search_result: ToolRunResponse) -> list[dict[str, str]]:
+        targets: list[dict[str, str]] = []
+        seen_urls: set[str] = set()
+        for item in self._search_result_items(search_result.output):
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            url = url.rstrip(".,;:!?)\u3002\uff0c\uff1b\uff1a\uff01\uff1f\uff09\u3011\u300d'\"")
+            if not self._is_http_url(url):
+                continue
+            key = url.lower()
+            if key in seen_urls:
+                continue
+            seen_urls.add(key)
+            targets.append(
+                {
+                    "url": url,
+                    "title": str(item.get("title") or ""),
+                    "snippet": str(item.get("snippet") or ""),
+                }
+            )
+            if len(targets) >= SEARCH_FETCH_MAX_PAGES:
+                break
+        return targets
+
+    def _search_result_items(self, output) -> list:
+        payload = output
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return []
+        if not isinstance(payload, dict):
+            return []
+        results = payload.get("results")
+        return results if isinstance(results, list) else []
+
+    def _is_http_url(self, url: str) -> bool:
+        if not url:
+            return False
+        parsed = urlparse(url)
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
     def _extract_fetch_url(self, message: str) -> str | None:
         match = FETCH_URL_RE.search(message)
