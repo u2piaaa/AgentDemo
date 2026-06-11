@@ -65,12 +65,14 @@ class FakeGateway:
         self,
         normalized_query: str | None = "latest AI news",
         normalize_error: Exception | None = None,
+        reply_text: str | None = None,
     ) -> None:
         self.stream_calls = []
         self.summary_calls = []
         self.normalized_query = normalized_query
         self.normalize_error = normalize_error
         self.normalize_calls = []
+        self.reply_text = reply_text
 
     def route(self, task_type: str, prompt: str) -> ModelRoute:
         return ModelRoute(model_name="fake-chat", provider="fake", reason=f"fake_{task_type}")
@@ -113,7 +115,9 @@ class FakeGateway:
             }
         )
         joined_context = "\n".join(context)
-        if "All search result page fetches failed" in joined_context:
+        if self.reply_text is not None:
+            text = self.reply_text
+        elif "All search result page fetches failed" in joined_context:
             text = "Search snippets are available, but page-body fetching failed. Source: https://example.com/news."
         elif "Fetched content:" in joined_context:
             text = "Fetched search page content says AI investment is rising. Source: https://example.com/news."
@@ -513,8 +517,37 @@ async def test_plain_chat_uses_fake_gateway_without_tool() -> None:
     assert "tool_call" not in [name for name, _ in events]
     assert next(data for name, data in events if name == "plan")["no_tool"] is True
     assert assistant_messages(session)[0].content == "plain chat response "
-    assert "Available runtime tools" in gateway.stream_calls[0]["context"][0]
-    assert "read_file" in gateway.stream_calls[0]["context"][0]
+    assert not any("Available runtime tools" in item for item in gateway.stream_calls[0]["context"])
+
+
+@pytest.mark.asyncio
+async def test_model_tool_protocol_markup_is_not_streamed_or_saved() -> None:
+    session = FakeSession()
+    gateway = FakeGateway(
+        reply_text=(
+            "<｜｜DSML｜｜tool_calls>\n"
+            "<invoke name=\"list_dir\"><parameter name=\"path\">.</parameter></invoke>"
+        )
+    )
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_read_file_tool(successful_read_file)),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "用三句话介绍这个项目能做什么。")
+
+    visible_text = "".join(data["text"] for name, data in events if name == "token")
+    saved = assistant_messages(session)[0].content
+    for text in (visible_text, saved):
+        lowered = text.lower()
+        assert "dsml" not in lowered
+        assert "tool_calls" not in lowered
+        assert "invoke name" not in lowered
+    assert "AgentDemo" in saved
+    assert next(data for name, data in events if name == "plan")["no_tool"] is True
+    assert "tool_call" not in [name for name, _ in events]
 
 
 @pytest.mark.asyncio
@@ -664,6 +697,43 @@ async def test_web_search_request_triggers_tool_and_influences_answer() -> None:
     assert tool_result["status"] == "success"
     assert "Web search results" in "\n".join(gateway.stream_calls[0]["context"])
     assert "https://example.com/news" in assistant_messages(session)[0].content
+
+
+@pytest.mark.asyncio
+async def test_chinese_freshness_news_with_sources_prefers_web_search_over_tool_inventory() -> None:
+    session = FakeSession()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(normalized_query='{"query": "AI news today"}'),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "今天 AI 领域有什么重要新闻？请列出来源。")
+
+    plan = next(data for name, data in events if name == "plan")
+    tool_call = next(data for name, data in events if name == "tool_call")
+    assert plan["no_tool"] is False
+    assert plan["tool_name"] == "web_search"
+    assert tool_call["tool_name"] == "web_search"
+    assert tool_call["arguments"]["recency_days"] == 1
+    assert "当前已加载的工具" not in assistant_messages(session)[0].content
+    assert "https://example.com/news" in assistant_messages(session)[0].content
+
+
+@pytest.mark.asyncio
+async def test_project_capability_intro_does_not_trigger_web_search() -> None:
+    runtime = AgentRuntime(
+        session=FakeSession(),
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "用三句话介绍这个项目能做什么。")
+
+    assert next(data for name, data in events if name == "plan")["no_tool"] is True
+    assert "tool_call" not in [name for name, _ in events]
 
 
 @pytest.mark.asyncio
@@ -964,6 +1034,15 @@ async def test_fetch_url_summary_uses_mcp_fetch_instead_of_web_search() -> None:
 
     events = await collect_events(runtime, "Please summarize this page https://example.com")
 
+    names = [name for name, _ in events]
+    plan_index = names.index("plan")
+    assert "error" not in names
+    assert names[-1] == "done"
+    assert not any(
+        data.get("label") == "retrieving_context"
+        for name, data in events[:plan_index]
+        if name == "status"
+    )
     tool_call = next(data for name, data in events if name == "tool_call")
     tool_result = next(data for name, data in events if name == "tool_result")
     assert tool_call["tool_name"] == "mcp.fetch.fetch"

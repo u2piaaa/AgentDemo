@@ -1088,9 +1088,10 @@ input:focus-visible {
     position: fixed;
     inset: auto 0 0;
     z-index: 35;
-    max-height: min(76dvh, 720px);
+    max-height: min(82dvh, 720px);
     border-radius: 16px 16px 0 0;
-    padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+    gap: 14px;
+    padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
     box-shadow: 0 -22px 48px rgba(17, 32, 46, 0.2);
     transform: translateY(calc(100% + 24px));
     transition: transform 220ms ease;
@@ -1112,6 +1113,34 @@ input:focus-visible {
     margin: 0;
     color: #172633;
     font-size: 18px;
+  }
+
+  .inspector section {
+    border-top: 1px solid var(--line);
+    padding-top: 12px;
+  }
+
+  .inspector section:first-of-type {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .inspector .section-title {
+    margin-bottom: 8px;
+  }
+
+  .inspector .stack-list {
+    gap: 8px;
+  }
+
+  .inspector .mini-card {
+    gap: 4px;
+    padding: 9px;
+  }
+
+  .inspector .mini-card p {
+    margin: 2px 0 0;
+    line-height: 1.35;
   }
 
   .mobile-scrim {

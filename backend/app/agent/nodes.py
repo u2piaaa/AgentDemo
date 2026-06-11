@@ -39,6 +39,20 @@ class AgentGraphNodes:
         await self.runtime._save_message(conversation_id, "user", state["message"])
         return {}
 
+    async def preflight_confirmable_tool(self, state: AgentGraphState) -> dict[str, Any]:
+        execution_state = graph_state_to_execution_state(state)
+        plan = self.runtime._plan_early_confirmable_tool(execution_state)
+        if plan is None:
+            return {}
+        emit_status("planning", state)
+        emit_event("plan", plan.model_dump())
+        return {
+            "plan": plan,
+            "route": self.runtime.model_gateway.route(
+                state.get("task_type", "conversation"), state["message"]
+            ),
+        }
+
     async def retrieve_context(self, state: AgentGraphState) -> dict[str, Any]:
         emit_status("retrieving_context", state)
         conversation_id = state.get("conversation_id")
@@ -107,7 +121,7 @@ class AgentGraphNodes:
         route = state["route"]
         execution_state = graph_state_to_execution_state(state)
         tool_availability_answer = None
-        if not state.get("confirmed_tool_name"):
+        if not state.get("confirmed_tool_name") and not execution_state.tool_calls:
             tool_availability_answer = self.runtime._tool_availability_answer(
                 execution_state.message
             )

@@ -147,6 +147,20 @@ WEB_SEARCH_QUERY_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 WEB_SEARCH_QUESTION_RE = re.compile(r"\b(who|what|when|where|which|how many|how much)\b")
+RAW_TOOL_PROTOCOL_RE = re.compile(
+    r"<\s*[|｜]*DSML[|｜]*tool_calls\s*>.*?(?:<\s*/\s*[|｜]*DSML[|｜]*tool_calls\s*>|$)"
+    r"|<\s*tool_calls?\s*>.*?(?:<\s*/\s*tool_calls?\s*>|$)"
+    r"|<\s*invoke\b[^>]*>.*?(?:<\s*/\s*invoke\s*>|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+RAW_TOOL_PROTOCOL_MARKERS = (
+    "<｜｜dsml｜｜tool_calls>",
+    "<||dsml||tool_calls>",
+    "<tool_calls>",
+    "<tool_call",
+    "<invoke",
+    "invoke name=",
+)
 
 
 class AgentRuntime:
@@ -266,13 +280,15 @@ class AgentRuntime:
             history=state.history,
         ):
             response_parts.append(token)
-            yield token
-        state.final_answer = "".join(response_parts)
+        raw_answer = "".join(response_parts)
+        state.final_answer = self._sanitize_model_answer(raw_answer, state.message)
+        if state.final_answer:
+            yield state.final_answer
 
     def _answer_context(self, state: AgentExecutionState) -> list[str]:
         context = [f"Memory summary:\n{summary}" for summary in state.memory_summaries]
         tool_context = self._available_tools_context()
-        if tool_context:
+        if tool_context and self._requests_tool_inventory(state.message.lower()):
             context.append(tool_context)
         context.extend(str(item["content"]) for item in state.citations if item.get("content"))
         context.extend(
@@ -309,6 +325,40 @@ class AgentRuntime:
             for tool in self.plugin_registry.list_tools()
             if tool.manifest.enabled
         ]
+
+    def _sanitize_model_answer(self, answer: str, message: str) -> str:
+        if not self._contains_raw_tool_protocol(answer):
+            return answer
+        cleaned = RAW_TOOL_PROTOCOL_RE.sub("", answer)
+        cleaned = "\n".join(
+            line
+            for line in cleaned.splitlines()
+            if not self._contains_raw_tool_protocol(line)
+        ).strip()
+        if cleaned:
+            return cleaned + ("\n" if answer.endswith("\n") else "")
+        return self._fallback_answer_after_protocol_strip(message)
+
+    def _contains_raw_tool_protocol(self, text: str) -> bool:
+        lowered = text.lower()
+        return any(marker in lowered for marker in RAW_TOOL_PROTOCOL_MARKERS)
+
+    def _fallback_answer_after_protocol_strip(self, message: str) -> str:
+        lowered = message.lower()
+        asks_project_capability = (
+            "agentdemo" in lowered
+            or "\u9879\u76ee" in message
+            or "\u80fd\u505a\u4ec0\u4e48" in message
+        )
+        if self._message_has_cjk(message) and asks_project_capability:
+            return (
+                "AgentDemo 可以通过聊天界面完成问答、计划执行和知识库检索，并把运行状态实时流式展示出来。"
+                "它支持通过安全的工具执行链路调用本地工具、MCP 工具、网页抓取和联网搜索。"
+                "前端还会展示计划、工具历史和最终回答，方便用户确认系统每一步做了什么。"
+            )
+        if self._message_has_cjk(message):
+            return "我拦截了模型生成的内部工具调用标记；请换一种方式重试这个请求。"
+        return "I blocked internal tool-call markup from the model response. Please retry the request."
 
     def _tool_availability_answer(self, message: str) -> str | None:
         lowered = message.lower()
@@ -515,8 +565,6 @@ class AgentRuntime:
             )
         if any(item.get("tool_name") == WEB_SEARCH_TOOL_NAME for item in state.tool_calls):
             return AgentToolPlan(no_tool=True, reason="The web has already been searched.")
-        if self._tool_availability_answer(state.message) is not None:
-            return AgentToolPlan(no_tool=True, reason="The user asked about available tools.")
         path = self._extract_read_file_path(state.message)
         if path is not None and self._requests_file_read(state.message):
             tool = self.plugin_registry.get("read_file") if self.plugin_registry else None
@@ -551,10 +599,27 @@ class AgentRuntime:
                 reason="The user asked for current or external web information.",
                 requires_confirmation=bool(tool and tool.manifest.requires_confirmation),
             )
+        if self._tool_availability_answer(state.message) is not None:
+            return AgentToolPlan(no_tool=True, reason="The user asked about available tools.")
         mcp_plan = self._plan_mcp_tool(state)
         if mcp_plan is not None:
             return mcp_plan
         return AgentToolPlan(no_tool=True, reason="No tool is needed for this message.")
+
+    def _plan_early_confirmable_tool(self, state: AgentExecutionState) -> AgentToolPlan | None:
+        if (
+            self._extract_github_reference(state.message) is not None
+            or self._requests_huggingface_tool(state.message)
+        ):
+            return None
+        fetch_plan = self._plan_fetch_tool(state)
+        if (
+            fetch_plan is not None
+            and not fetch_plan.no_tool
+            and fetch_plan.requires_confirmation
+        ):
+            return fetch_plan
+        return None
 
     def _plan_fetch_tool(self, state: AgentExecutionState) -> AgentToolPlan | None:
         url = self._extract_fetch_url(state.message)
