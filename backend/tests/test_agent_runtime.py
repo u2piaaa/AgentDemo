@@ -810,11 +810,12 @@ async def test_web_search_all_fetch_failures_fall_back_to_search_snippets() -> N
 
     await collect_events(runtime, "web search today's AI news")
 
-    context = "\n".join(gateway.stream_calls[-1]["context"])
-    assert "Web search results" in context
-    assert "All search result page fetches failed" in context
-    assert "page-body fetching failed" in assistant_messages(session)[0].content
-    assert "https://example.com/news" in assistant_messages(session)[0].content
+    assert gateway.stream_calls == []
+    answer = assistant_messages(session)[0].content
+    assert "every search-result page fetch failed" in answer
+    assert "Fallback summary" in answer or "fallback summary" in answer
+    assert "Current AI news" in answer
+    assert "https://example.com/news" in answer
 
 
 @pytest.mark.asyncio
