@@ -159,6 +159,20 @@ function appendTraceStatus(statuses: string[] | undefined, label: string): strin
   return [...current, label].slice(-8);
 }
 
+function runtimeStatusLabel(label: string, model?: string): string {
+  const labels: Record<string, string> = {
+    ensure_conversation: "Preparing conversation",
+    load_history: "Loading conversation history",
+    save_user_message: "Saving your message",
+    retrieving_context: "Retrieving context - still working",
+    planning: "Planning next step",
+    generating: model ? `Generating answer with ${model}` : "Generating answer",
+    save_assistant_message: "Saving answer",
+    update_memory_summary: "Updating memory"
+  };
+  return labels[label] ?? (model ? `${label}: ${model}` : label);
+}
+
 function summarizeValue(value: unknown, fallback = "No data"): string {
   if (value === null || value === undefined) {
     return fallback;
@@ -787,7 +801,7 @@ export function App() {
 
   function handleRuntimeEvent(assistantMessageId: string, event: StreamEvent) {
     if (event.event === "status") {
-      const label = event.data.model ? `${event.data.label}: ${event.data.model}` : event.data.label;
+      const label = runtimeStatusLabel(event.data.label, event.data.model);
       setStatus(label);
       updateExecutionTrace(assistantMessageId, (trace) => ({
         ...trace,

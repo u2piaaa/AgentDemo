@@ -16,6 +16,7 @@ def build_agent_graph(runtime, mode: GraphMode = "chat"):
     graph.add_node("ensure_conversation", nodes.ensure_conversation)
     graph.add_node("load_context", nodes.load_context)
     graph.add_node("save_user_message", nodes.save_user_message)
+    graph.add_node("preflight_confirmable_tool", nodes.preflight_confirmable_tool)
     graph.add_node("retrieve_context", nodes.retrieve_context)
     graph.add_node("plan", nodes.plan)
     graph.add_node("execute_tool", nodes.execute_tool)
@@ -33,7 +34,12 @@ def build_agent_graph(runtime, mode: GraphMode = "chat"):
         graph.add_edge(START, "ensure_conversation")
         graph.add_edge("ensure_conversation", "load_context")
         graph.add_edge("load_context", "save_user_message")
-        graph.add_edge("save_user_message", "retrieve_context")
+        graph.add_edge("save_user_message", "preflight_confirmable_tool")
+        graph.add_conditional_edges(
+            "preflight_confirmable_tool",
+            _route_after_preflight_confirmable_tool,
+            {"execute_tool": "execute_tool", "retrieve_context": "retrieve_context"},
+        )
         graph.add_edge("retrieve_context", "plan")
         graph.add_conditional_edges(
             "plan",
@@ -57,6 +63,13 @@ def _route_after_plan(state: AgentGraphState) -> str:
     if plan is None or plan.no_tool:
         return "generate_answer"
     return "execute_tool"
+
+
+def _route_after_preflight_confirmable_tool(state: AgentGraphState) -> str:
+    plan = state.get("plan")
+    if plan is not None and not plan.no_tool and plan.requires_confirmation:
+        return "execute_tool"
+    return "retrieve_context"
 
 
 def _route_after_execute_tool(state: AgentGraphState) -> str:
