@@ -61,9 +61,16 @@ class FakeRag:
 
 
 class FakeGateway:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        normalized_query: str | None = "latest AI news",
+        normalize_error: Exception | None = None,
+    ) -> None:
         self.stream_calls = []
         self.summary_calls = []
+        self.normalized_query = normalized_query
+        self.normalize_error = normalize_error
+        self.normalize_calls = []
 
     def route(self, task_type: str, prompt: str) -> ModelRoute:
         return ModelRoute(model_name="fake-chat", provider="fake", reason=f"fake_{task_type}")
@@ -83,6 +90,12 @@ class FakeGateway:
                     reason="fake mcp plan",
                 )
         return StructuredToolPlan(no_tool=True, reason="fake no tool")
+
+    async def normalize_web_search_query(self, message: str) -> str:
+        self.normalize_calls.append(message)
+        if self.normalize_error is not None:
+            raise self.normalize_error
+        return self.normalized_query or ""
 
     async def stream_reply(
         self,
@@ -627,7 +640,7 @@ async def test_tool_failure_is_available_to_final_answer() -> None:
 @pytest.mark.asyncio
 async def test_web_search_request_triggers_tool_and_influences_answer() -> None:
     session = FakeSession()
-    gateway = FakeGateway()
+    gateway = FakeGateway(normalized_query='{"query": "AI news today"}')
     runtime = AgentRuntime(
         session=session,
         plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
@@ -635,18 +648,83 @@ async def test_web_search_request_triggers_tool_and_influences_answer() -> None:
         rag_service=FakeRag(),  # type: ignore[arg-type]
     )
 
-    events = await collect_events(runtime, "联网搜索今天的 AI 新闻")
+    message = "今天AI领域有什么新闻，分条总结一下"
+    events = await collect_events(runtime, message)
 
     names = [name for name, _ in events]
     tool_call = next(data for name, data in events if name == "tool_call")
     tool_result = next(data for name, data in events if name == "tool_result")
     assert "tool_call" in names
     assert tool_call["tool_name"] == "web_search"
-    assert tool_call["arguments"]["query"] == "联网搜索今天的 AI 新闻"
+    assert gateway.normalize_calls == [message]
+    assert tool_call["arguments"]["query"] == "AI news today"
+    assert tool_call["arguments"]["query"] != message
+    assert "分条总结一下" not in tool_call["arguments"]["query"]
     assert tool_call["arguments"]["recency_days"] == 1
     assert tool_result["status"] == "success"
     assert "Web search results" in "\n".join(gateway.stream_calls[0]["context"])
     assert "https://example.com/news" in assistant_messages(session)[0].content
+
+
+@pytest.mark.asyncio
+async def test_web_search_query_falls_back_when_llm_normalization_fails() -> None:
+    session = FakeSession()
+    gateway = FakeGateway(normalize_error=RuntimeError("model unavailable"))
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    message = "今天AI领域有什么新闻，分条总结一下"
+    events = await collect_events(runtime, message)
+
+    tool_call = next(data for name, data in events if name == "tool_call")
+    assert gateway.normalize_calls == [message]
+    assert tool_call["tool_name"] == "web_search"
+    assert tool_call["arguments"]["query"] == "AI news today"
+    assert tool_call["arguments"]["query"] != message
+    assert "分条总结一下" not in tool_call["arguments"]["query"]
+    assert tool_call["arguments"]["recency_days"] == 1
+
+
+@pytest.mark.asyncio
+async def test_web_search_query_falls_back_when_llm_returns_question_text() -> None:
+    session = FakeSession()
+    gateway = FakeGateway(normalized_query="今天AI领域有什么新闻")
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "今天AI领域有什么新闻，分条总结一下")
+
+    tool_call = next(data for name, data in events if name == "tool_call")
+    assert tool_call["tool_name"] == "web_search"
+    assert tool_call["arguments"]["query"] == "AI news today"
+    assert "有什么" not in tool_call["arguments"]["query"]
+    assert tool_call["arguments"]["recency_days"] == 1
+
+
+@pytest.mark.asyncio
+async def test_web_search_query_falls_back_when_llm_returns_empty_text() -> None:
+    gateway = FakeGateway(normalized_query="")
+    runtime = AgentRuntime(
+        session=FakeSession(),
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "今天AI领域有什么新闻，分条总结一下")
+
+    tool_call = next(data for name, data in events if name == "tool_call")
+    assert tool_call["tool_name"] == "web_search"
+    assert tool_call["arguments"]["query"] == "AI news today"
+    assert tool_call["arguments"]["recency_days"] == 1
 
 
 @pytest.mark.asyncio
@@ -1360,7 +1438,7 @@ async def test_runtime_generates_memory_summary_for_long_conversation() -> None:
 
 
 class LoopingRuntime(AgentRuntime):
-    def _plan_next_step(self, state) -> AgentToolPlan:
+    async def _plan_next_step(self, state) -> AgentToolPlan:
         return AgentToolPlan(
             no_tool=False,
             tool_name="read_file",
