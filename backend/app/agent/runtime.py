@@ -308,6 +308,38 @@ class AgentRuntime:
             return f"\u5f53\u524d\u5df2\u52a0\u8f7d\u7684\u5de5\u5177\u6709\uff1a{names}\u3002"
         return None
 
+    def _tool_failure_answer(self, state: AgentExecutionState) -> str | None:
+        if not state.tool_calls:
+            return None
+        latest = state.tool_calls[-1]
+        if latest.get("tool_name") != WEB_SEARCH_TOOL_NAME:
+            return None
+        result = latest.get("result")
+        if not isinstance(result, dict):
+            return None
+        status = str(result.get("status") or "")
+        if status == "success":
+            return None
+        error = str(result.get("error") or status or "unknown error")
+        if self._message_has_cjk(state.message):
+            return (
+                "\u6211\u6ca1\u80fd\u5b8c\u6210\u8fd9\u6b21\u8054\u7f51\u641c\u7d22\uff1a"
+                f"{error}\n\n"
+                "\u56e0\u4e3a\u6ca1\u6709\u6210\u529f\u83b7\u53d6\u641c\u7d22\u7ed3\u679c\uff0c"
+                "\u6211\u4e0d\u4f1a\u7f16\u9020\u4eca\u5929\u7684\u65b0\u95fb\u6458\u8981\u3002"
+                "\u8bf7\u5728\u540e\u7aef\u914d\u7f6e `WEB_SEARCH_PROVIDER` \u548c\u5bf9\u5e94"
+                " `WEB_SEARCH_API_KEY` \u540e\u91cd\u8bd5\u3002"
+            )
+        return (
+            f"I could not complete the web search: {error}\n\n"
+            "Because no search results were retrieved, I will not invent a news summary. "
+            "Configure `WEB_SEARCH_PROVIDER` and the matching `WEB_SEARCH_API_KEY` on the "
+            "backend, then try again."
+        )
+
+    def _message_has_cjk(self, message: str) -> bool:
+        return any("\u4e00" <= char <= "\u9fff" for char in message)
+
     def _requests_tool_inventory(self, lowered_message: str) -> bool:
         return (
             bool(re.search(r"\b(available|exists|have|check|list)\b", lowered_message))

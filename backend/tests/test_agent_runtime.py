@@ -281,6 +281,13 @@ def successful_web_search(query: str, max_results: int | None = None, recency_da
     }
 
 
+def failing_web_search(query: str, max_results: int | None = None, recency_days: int | None = None):
+    raise RuntimeError(
+        "Web search provider is disabled. Set WEB_SEARCH_PROVIDER and WEB_SEARCH_API_KEY "
+        "to enable live search."
+    )
+
+
 def web_search_with_results(results: list[dict]):
     def handler(query: str, max_results: int | None = None, recency_days: int | None = None):
         return {
@@ -640,6 +647,30 @@ async def test_web_search_request_triggers_tool_and_influences_answer() -> None:
     assert tool_result["status"] == "success"
     assert "Web search results" in "\n".join(gateway.stream_calls[0]["context"])
     assert "https://example.com/news" in assistant_messages(session)[0].content
+
+
+@pytest.mark.asyncio
+async def test_web_search_failure_returns_runtime_answer_without_model_tool_calls() -> None:
+    session = FakeSession()
+    gateway = FakeGateway()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_web_search_tool(failing_web_search)),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "今天AI领域有什么新闻，分条总结一下")
+
+    tool_result = next(data for name, data in events if name == "tool_result")
+    assert tool_result["tool_name"] == "web_search"
+    assert tool_result["status"] == "failed"
+    answer = assistant_messages(session)[0].content
+    assert "我没能完成这次联网搜索" in answer
+    assert "WEB_SEARCH_PROVIDER" in answer
+    assert "不会编造" in answer
+    assert "<tool_call" not in answer
+    assert gateway.stream_calls == []
 
 
 @pytest.mark.asyncio
