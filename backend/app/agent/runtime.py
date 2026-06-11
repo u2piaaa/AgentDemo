@@ -312,6 +312,9 @@ class AgentRuntime:
         if not state.tool_calls:
             return None
         latest = state.tool_calls[-1]
+        search_fallback = self._search_results_fallback_answer(state)
+        if search_fallback is not None:
+            return search_fallback
         if latest.get("tool_name") != WEB_SEARCH_TOOL_NAME:
             return None
         result = latest.get("result")
@@ -339,6 +342,78 @@ class AgentRuntime:
 
     def _message_has_cjk(self, message: str) -> bool:
         return any("\u4e00" <= char <= "\u9fff" for char in message)
+
+    def _search_results_fallback_answer(self, state: AgentExecutionState) -> str | None:
+        search_call = self._latest_successful_web_search_call(state)
+        if search_call is None:
+            return None
+        enrichment_calls = [
+            item
+            for item in state.tool_calls
+            if item.get("tool_name") == MCP_FETCH_TOOL_NAME and item.get("search_enrichment")
+        ]
+        if not enrichment_calls:
+            return None
+        if any(
+            isinstance(item.get("result"), dict)
+            and item["result"].get("status") == "success"
+            for item in enrichment_calls
+        ):
+            return None
+        result = search_call.get("result")
+        if not isinstance(result, dict):
+            return None
+        output = result.get("output")
+        results = self._search_result_items(output)[:5]
+        if not results:
+            return None
+        provider = "web_search"
+        if isinstance(output, dict):
+            provider = str(output.get("provider") or provider)
+        lines: list[str] = []
+        for index, item in enumerate(results, start=1):
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "Untitled").strip()
+            snippet = str(item.get("snippet") or "").strip()
+            url = str(item.get("url") or "").strip()
+            if self._message_has_cjk(state.message):
+                line = f"{index}. {title}"
+                if snippet:
+                    line += f"\n   摘要：{snippet}"
+                if url:
+                    line += f"\n   来源：{url}"
+            else:
+                line = f"{index}. {title}"
+                if snippet:
+                    line += f"\n   Summary: {snippet}"
+                if url:
+                    line += f"\n   Source: {url}"
+            lines.append(line)
+        if not lines:
+            return None
+        if self._message_has_cjk(state.message):
+            return (
+                f"我已经完成 {provider} 搜索，但搜索结果网页正文全部抓取失败，"
+                "所以先基于搜索结果标题、摘要和来源链接给你一个降级版总结：\n\n"
+                + "\n\n".join(lines)
+                + "\n\n注意：以上不是网页正文深度分析；请稍后重试网页抓取或更换可访问来源。"
+            )
+        return (
+            f"The {provider} search succeeded, but every search-result page fetch failed. "
+            "Here is a fallback summary from the search titles, snippets, and source URLs:\n\n"
+            + "\n\n".join(lines)
+            + "\n\nNote: this is not a full page-body analysis; retry fetching later or use accessible sources."
+        )
+
+    def _latest_successful_web_search_call(self, state: AgentExecutionState) -> dict | None:
+        for item in reversed(state.tool_calls):
+            if item.get("tool_name") != WEB_SEARCH_TOOL_NAME:
+                continue
+            result = item.get("result")
+            if isinstance(result, dict) and result.get("status") == "success":
+                return item
+        return None
 
     def _requests_tool_inventory(self, lowered_message: str) -> bool:
         return (
