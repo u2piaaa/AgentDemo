@@ -113,7 +113,10 @@ class AgentGraphNodes:
             )
         tool_failure_answer = self.runtime._tool_failure_answer(execution_state)
 
-        if tool_availability_answer is not None:
+        if execution_state.final_answer:
+            emit_event("status", {"label": "generating", "model": "runtime"})
+            emit_event("token", {"text": execution_state.final_answer})
+        elif tool_availability_answer is not None:
             emit_event("status", {"label": "generating", "model": "runtime"})
             execution_state.final_answer = tool_availability_answer
             emit_event("token", {"text": tool_availability_answer})

@@ -780,6 +780,9 @@ class AgentRuntime:
                 "All search result page fetches failed. Fall back to the web search titles, "
                 f"snippets, and URLs, and explain that page-body fetching failed: {detail}"
             )
+            fallback = self._search_results_fallback_answer(state)
+            if fallback is not None:
+                state.final_answer = fallback
 
     async def _load_mcp_resources_for_context(self, message: str) -> list[dict[str, str]]:
         if self.mcp_client is None:
