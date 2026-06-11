@@ -90,7 +90,7 @@ class AgentGraphNodes:
 
         emit_status("planning", state)
         execution_state = graph_state_to_execution_state(state)
-        plan = self.runtime._plan_next_step(execution_state)
+        plan = await self.runtime._plan_next_step(execution_state)
         emit_event("plan", plan.model_dump())
         return {"plan": plan}
 

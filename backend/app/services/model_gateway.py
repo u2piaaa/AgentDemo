@@ -53,6 +53,26 @@ class ModelGateway:
                 )
         return StructuredToolPlan(no_tool=True, reason="No tool is needed for this message.")
 
+    async def normalize_web_search_query(self, message: str) -> str:
+        prompt = (
+            "Rewrite the user's request as a concise web search engine query.\n"
+            "Return only the query text, with no explanation, quotes, markdown, JSON, or label.\n"
+            "Keep entities, topic, location, and time intent. Remove answer-format instructions "
+            "such as summarize, list bullets, compare, answer in Chinese, or explain.\n"
+            "Prefer English query terms when the topic is global news.\n"
+            f"User request: {message}"
+        )
+        route = self.route("web_search_query", prompt)
+        parts: list[str] = []
+        async for token in self.stream_reply(
+            model_name=route.model_name,
+            prompt=prompt,
+            context=[],
+            history=[],
+        ):
+            parts.append(token)
+        return "".join(parts).strip()
+
     async def stream_reply(
         self,
         model_name: str,

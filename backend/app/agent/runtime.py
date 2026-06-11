@@ -112,6 +112,40 @@ WEB_SEARCH_FACT_QUERY_TERMS = (
     "\u6d88\u606f",
     "\u8d44\u8baf",
 )
+WEB_SEARCH_QUERY_FORMAT_TERMS = (
+    "summarize",
+    "summary",
+    "bullet",
+    "bullets",
+    "bullet points",
+    "list",
+    "answer in chinese",
+    "respond in chinese",
+    "explain",
+    "\u5206\u6761\u603b\u7ed3\u4e00\u4e0b",
+    "\u5206\u6761\u603b\u7ed3",
+    "\u5206\u6761",
+    "\u603b\u7ed3\u4e00\u4e0b",
+    "\u603b\u7ed3",
+    "\u7528\u4e2d\u6587\u56de\u7b54",
+    "\u4e2d\u6587\u56de\u7b54",
+    "\u8bf4\u660e\u4e00\u4e0b",
+    "\u89e3\u91ca\u4e00\u4e0b",
+)
+WEB_SEARCH_QUERY_QUESTION_NOISE = (
+    "what are",
+    "what is",
+    "tell me",
+    "\u6709\u4ec0\u4e48",
+    "\u6709\u54ea\u4e9b",
+    "\u4ec0\u4e48",
+    "\u54ea\u4e9b",
+)
+WEB_SEARCH_QUERY_LABEL_RE = re.compile(
+    r"^\s*(?:search\s+query|query|rewritten\s+query|final\s+query|"
+    r"\u641c\u7d22\u8bcd|\u67e5\u8be2)[:\uff1a]\s*",
+    re.IGNORECASE,
+)
 WEB_SEARCH_QUESTION_RE = re.compile(r"\b(who|what|when|where|which|how many|how much)\b")
 
 
@@ -458,7 +492,7 @@ class AgentRuntime:
     def _dump_citations(self, citations: list[Citation]) -> list[dict]:
         return [item.model_dump() for item in citations]
 
-    def _plan_next_step(self, state: AgentExecutionState) -> AgentToolPlan:
+    async def _plan_next_step(self, state: AgentExecutionState) -> AgentToolPlan:
         if any(item.get("tool_name") == "read_file" for item in state.tool_calls):
             return AgentToolPlan(no_tool=True, reason="The requested file has already been read.")
         if any(
@@ -513,7 +547,7 @@ class AgentRuntime:
                 provider=tool.provider if tool else "local_plugin",
                 provider_tool_id=tool.provider_tool_id if tool else WEB_SEARCH_TOOL_NAME,
                 server_name=tool.server_name if tool else None,
-                arguments=self._web_search_arguments(state.message),
+                arguments=await self._web_search_arguments(state.message),
                 reason="The user asked for current or external web information.",
                 requires_confirmation=bool(tool and tool.manifest.requires_confirmation),
             )
@@ -1214,12 +1248,118 @@ class AgentRuntime:
             or any(term in lowered for term in WEB_SEARCH_FACT_QUERY_TERMS)
         )
 
-    def _web_search_arguments(self, message: str) -> dict[str, str | int]:
-        arguments: dict[str, str | int] = {"query": " ".join(message.strip().split())}
+    async def _web_search_arguments(self, message: str) -> dict[str, str | int]:
+        arguments: dict[str, str | int] = {
+            "query": await self._normalized_web_search_query(message)
+        }
         recency_days = self._infer_web_search_recency_days(message)
         if recency_days is not None:
             arguments["recency_days"] = recency_days
         return arguments
+
+    async def _normalized_web_search_query(self, message: str) -> str:
+        try:
+            candidate = await self.model_gateway.normalize_web_search_query(message)
+        except Exception:
+            candidate = ""
+        query = self._clean_web_search_query(candidate, message)
+        if query:
+            return query
+        return self._fallback_web_search_query(message)
+
+    def _clean_web_search_query(self, candidate: str, message: str) -> str:
+        text = str(candidate or "").strip()
+        if not text:
+            return ""
+        if text.startswith("```"):
+            text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
+            text = re.sub(r"\s*```$", "", text).strip()
+        parsed_query = self._query_from_json_text(text)
+        if parsed_query is not None:
+            text = parsed_query
+        text = next((line.strip() for line in text.splitlines() if line.strip()), "")
+        text = re.sub(r"^\s*[-*#\d.)\]]+\s*", "", text).strip()
+        text = WEB_SEARCH_QUERY_LABEL_RE.sub("", text).strip()
+        text = re.sub(
+            r"(?i)^the\s+(?:best|concise|final)?\s*search\s+query\s+"
+            r"(?:is|should\s+be)\s*[:\uff1a]?\s*",
+            "",
+            text,
+        ).strip()
+        text = text.strip("`'\"\u201c\u201d\u2018\u2019")
+        text = self._remove_query_format_terms(text)
+        text = self._compact_query_text(text)
+        if not text:
+            return ""
+        lowered = text.lower()
+        if any(term in lowered for term in ("query should", "i would search", "here is")):
+            return ""
+        if any(term.lower() in lowered for term in WEB_SEARCH_QUERY_FORMAT_TERMS):
+            return ""
+        if any(term.lower() in lowered for term in WEB_SEARCH_QUERY_QUESTION_NOISE):
+            return ""
+        if text == self._compact_query_text(message):
+            return ""
+        if len(text) > 120:
+            return ""
+        if len(re.findall(r"\S+", text)) > 14:
+            return ""
+        return text
+
+    def _query_from_json_text(self, text: str) -> str | None:
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, str):
+            return parsed
+        if isinstance(parsed, dict):
+            for key in ("query", "search_query", "q"):
+                value = parsed.get(key)
+                if isinstance(value, str):
+                    return value
+        return None
+
+    def _fallback_web_search_query(self, message: str) -> str:
+        text = self._message_without_urls(message)
+        lowered = text.lower()
+        has_ai = "ai" in lowered or "\u4eba\u5de5\u667a\u80fd" in text
+        has_news = "news" in lowered or "\u65b0\u95fb" in text or "\u6d88\u606f" in text
+        if has_ai and has_news:
+            if any(term in lowered for term in ("today", "now", "\u4eca\u5929", "\u73b0\u5728")):
+                return "AI news today"
+            return "latest AI news"
+
+        for term in (*WEB_SEARCH_TRIGGER_TERMS, *WEB_SEARCH_QUERY_FORMAT_TERMS):
+            text = re.sub(re.escape(term), " ", text, flags=re.IGNORECASE)
+        text = re.sub(
+            r"(?i)\b(?:please|could\s+you|can\s+you|tell\s+me|find|search|look\s+up)\b",
+            " ",
+            text,
+        )
+        for term in (
+            "\u8bf7",
+            "\u4e00\u4e0b",
+            "\u5e2e\u6211",
+            "\u67e5\u4e00\u4e0b",
+            "\u6709\u4ec0\u4e48",
+            "\u6709\u54ea\u4e9b",
+        ):
+            text = text.replace(term, " ")
+        text = self._remove_query_format_terms(text)
+        text = self._compact_query_text(text)
+        return text[:120].strip() or "latest news"
+
+    def _remove_query_format_terms(self, text: str) -> str:
+        cleaned = text
+        for term in WEB_SEARCH_QUERY_FORMAT_TERMS:
+            cleaned = re.sub(re.escape(term), " ", cleaned, flags=re.IGNORECASE)
+        return cleaned
+
+    def _compact_query_text(self, text: str) -> str:
+        text = re.sub(r"[\r\n\t]+", " ", text)
+        text = re.sub(r"[，,。.!！?？；;：:、]+", " ", text)
+        return " ".join(text.strip().split())
 
     def _infer_web_search_recency_days(self, message: str) -> int | None:
         lowered = message.lower()
