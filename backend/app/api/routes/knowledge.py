@@ -54,7 +54,7 @@ async def import_mcp_resource(
     if payload.conversation_id is not None:
         await require_owned_conversation(session, payload.conversation_id, current_user.id)
     resource = await request.app.state.mcp_client.read_resource(payload.server_name, payload.uri)
-    content = str(resource.get("text") or resource.get("content") or "")
+    content = extract_mcp_resource_text(resource)
     if not content.strip():
         raise HTTPException(status_code=422, detail="MCP resource did not contain text")
     document = KnowledgeDocumentCreate(
@@ -66,6 +66,31 @@ async def import_mcp_resource(
         content=content,
     )
     return await RagService(session, user_id=current_user.id).index_text(document)
+
+
+def extract_mcp_resource_text(resource: dict) -> str:
+    """Normalize inline and standard MCP resources/read content blocks to text."""
+
+    collected: list[str] = []
+
+    def collect(value) -> None:
+        if isinstance(value, str):
+            text = value.strip()
+            if text and text not in collected:
+                collected.append(text)
+            return
+        if isinstance(value, list):
+            for item in value:
+                collect(item)
+            return
+        if isinstance(value, dict):
+            for key in ("text", "content"):
+                collect(value.get(key))
+
+    collect(resource.get("text"))
+    collect(resource.get("content"))
+    collect(resource.get("contents"))
+    return "\n\n".join(collected)
 
 
 @router.post("/documents/upload", response_model=KnowledgeDocumentRead)

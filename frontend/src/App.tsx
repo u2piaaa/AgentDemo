@@ -1290,7 +1290,7 @@ export function App() {
                 </div>
                 <div>
                   <dt>Tasks</dt>
-                  <dd>asyncio / APScheduler</dd>
+                  <dd>durable asyncio workers</dd>
                 </div>
                 <div>
                   <dt>Storage</dt>

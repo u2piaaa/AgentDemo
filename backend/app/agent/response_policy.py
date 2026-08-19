@@ -1,3 +1,4 @@
+import json
 import re
 
 from app.agent.constants import MCP_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME
@@ -22,7 +23,7 @@ RAW_TOOL_PROTOCOL_MARKERS = (
 class AgentResponsePolicy:
     """User-visible response safety, inventory answers, and degraded search output."""
 
-    def _sanitize_model_answer(self, answer: str, message: str) -> str:
+    def _sanitize_model_answer(self, answer: str, state: AgentExecutionState) -> str:
         if not self._contains_raw_tool_protocol(answer):
             return answer
         cleaned = RAW_TOOL_PROTOCOL_RE.sub("", answer)
@@ -31,13 +32,18 @@ class AgentResponsePolicy:
         ).strip()
         if cleaned:
             return cleaned + ("\n" if answer.endswith("\n") else "")
-        return self._fallback_answer_after_protocol_strip(message)
+        return self._fallback_answer_after_protocol_strip(state)
 
     def _contains_raw_tool_protocol(self, text: str) -> bool:
         lowered = text.lower()
         return any(marker in lowered for marker in RAW_TOOL_PROTOCOL_MARKERS)
 
-    def _fallback_answer_after_protocol_strip(self, message: str) -> str:
+    def _fallback_answer_after_protocol_strip(self, state: AgentExecutionState) -> str:
+        tool_answer = self._successful_tool_fallback_answer(state)
+        if tool_answer is not None:
+            return tool_answer
+
+        message = state.message
         lowered = message.lower()
         asks_project_capability = (
             "agentdemo" in lowered or "项目" in message or "能做什么" in message
@@ -51,6 +57,63 @@ class AgentResponsePolicy:
         if self._message_has_cjk(message):
             return "我拦截了模型生成的内部工具调用标记；请换一种方式重试这个请求。"
         return "I blocked internal tool-call markup from the model response. Please retry the request."
+
+    def _successful_tool_fallback_answer(self, state: AgentExecutionState) -> str | None:
+        for tool_call in reversed(state.tool_calls):
+            result = tool_call.get("result")
+            if not isinstance(result, dict) or result.get("status") != "success":
+                continue
+            tool_name = str(tool_call.get("tool_name") or "tool")
+            output = result.get("output")
+            if tool_name == "read_file" and isinstance(output, dict):
+                content = str(output.get("content") or "").strip()
+                if not content:
+                    continue
+                path = str(output.get("path") or tool_call.get("arguments", {}).get("path") or "file")
+                asks_first_line = "第一行" in state.message or bool(
+                    re.search(r"\bfirst\s+line\b", state.message, re.IGNORECASE)
+                )
+                if asks_first_line:
+                    first_line = next(
+                        (line.strip() for line in content.splitlines() if line.strip()),
+                        content,
+                    )
+                    if self._message_has_cjk(state.message):
+                        return f"文件 `{path}` 的第一行是：{first_line}"
+                    return f"The first line of `{path}` is: {first_line}"
+                limited = self._limit_fallback_text(content)
+                if self._message_has_cjk(state.message):
+                    return f"已成功读取文件 `{path}`。可用内容如下：\n\n{limited}"
+                return f"The file `{path}` was read successfully. Available content:\n\n{limited}"
+
+            text = self._tool_output_text(output)
+            if not text:
+                continue
+            limited = self._limit_fallback_text(text)
+            if self._message_has_cjk(state.message):
+                return f"工具 `{tool_name}` 已成功执行。可用结果如下：\n\n{limited}"
+            return f"Tool `{tool_name}` completed successfully. Available result:\n\n{limited}"
+        return None
+
+    def _tool_output_text(self, value) -> str:
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, list):
+            return "\n".join(
+                text for item in value if (text := self._tool_output_text(item))
+            ).strip()
+        if isinstance(value, dict):
+            for key in ("text", "content"):
+                text = self._tool_output_text(value.get(key))
+                if text:
+                    return text
+            return json.dumps(value, ensure_ascii=False, default=str)
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    def _limit_fallback_text(self, text: str, limit: int = 4000) -> str:
+        return text if len(text) <= limit else f"{text[:limit]}…"
 
     def _tool_availability_answer(self, message: str) -> str | None:
         lowered = message.lower()
