@@ -1151,6 +1151,35 @@ async def test_github_repo_url_uses_github_mcp_before_fetch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_github_repo_file_request_uses_github_mcp_before_local_file_tool() -> None:
+    github_registry = await make_mcp_github_registry()
+    registry = FakeRegistry(
+        [make_read_file_tool(successful_read_file), *github_registry.list_tools()],
+        mcp_client=github_registry.mcp_client,
+    )
+    runtime = AgentRuntime(
+        session=FakeSession(),
+        plugin_registry=registry,  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(
+        runtime,
+        "请通过 GitHub 读取 https://github.com/u2piaaa/AgentDemo 仓库的 README.md",
+    )
+
+    tool_call = next(data for name, data in events if name == "tool_call")
+    assert tool_call["tool_name"] == "mcp.github.get_file_contents"
+    assert tool_call["arguments"] == {
+        "owner": "u2piaaa",
+        "repo": "AgentDemo",
+        "path": "README.md",
+    }
+    assert tool_call["requires_confirmation"] is True
+
+
+@pytest.mark.asyncio
 async def test_github_blob_url_uses_file_path_and_ref() -> None:
     runtime = AgentRuntime(
         session=FakeSession(),
