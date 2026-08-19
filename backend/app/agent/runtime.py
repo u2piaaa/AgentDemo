@@ -272,7 +272,7 @@ class AgentRuntime(AgentResponsePolicy):
         ):
             response_parts.append(token)
         raw_answer = "".join(response_parts)
-        state.final_answer = self._sanitize_model_answer(raw_answer, state.message)
+        state.final_answer = self._sanitize_model_answer(raw_answer, state)
         if state.final_answer:
             yield state.final_answer
 

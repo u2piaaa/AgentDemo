@@ -551,6 +551,31 @@ async def test_model_tool_protocol_markup_is_not_streamed_or_saved() -> None:
 
 
 @pytest.mark.asyncio
+async def test_model_tool_protocol_after_successful_read_uses_tool_result() -> None:
+    session = FakeSession()
+    gateway = FakeGateway(
+        reply_text=(
+            "<｜｜DSML｜｜tool_calls>\n"
+            '<invoke name="read_file"><parameter name="path">README.md</parameter></invoke>'
+        )
+    )
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_read_file_tool(successful_read_file)),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "请读取 README.md 并告诉我第一行")
+
+    visible_text = "".join(data["text"] for name, data in events if name == "token")
+    saved = assistant_messages(session)[0].content
+    assert "AgentDemo runtime README" in visible_text
+    assert saved == visible_text
+    assert "请换一种方式重试" not in saved
+
+
+@pytest.mark.asyncio
 async def test_graph_plain_chat_matches_runtime_contract() -> None:
     session = FakeSession()
     runtime = AgentRuntime(
