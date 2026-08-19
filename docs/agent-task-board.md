@@ -43,3 +43,4 @@ This board tracks the executable-agent upgrade across short-lived agent branches
 - Follow-up targeted run: runtime/model/tool tests = 28 passed; frontend build passed; `git diff --check` passed.
 - Follow-up `test`: `python -m pytest` via backend venv = 73 passed, 1 skipped, 3 warnings; `npm run build` passed; browser render check passed with no console errors.
 - Follow-up `merge`: `python -m pytest` via backend venv = 73 passed, 1 skipped, 3 warnings; `npm run build` passed; `git diff --check` passed; tracked sensitive/runtime file scan found no matches.
+- Project hardening release: backend = 170 passed with 81.60% coverage and Ruff clean; frontend = 9 passed, production build passed, and `npm audit --audit-level=high` found 0 vulnerabilities. Real background-agent API checks covered success, task-bound tool audit, cancellation, startup recovery, and mobile browser layout.

@@ -82,6 +82,7 @@ class AgentToolPlan(BaseModel):
 
 class AgentExecutionState(BaseModel):
     user_id: UUID | None = None
+    task_id: UUID | None = None
     conversation_id: UUID | None = None
     message: str
     history: list[dict[str, str]] = Field(default_factory=list)
@@ -108,11 +109,13 @@ class MessageRead(BaseModel):
 
 
 class TaskRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: UUID
     conversation_id: UUID | None
     name: str
+    kind: str = "manual"
+    input_: dict[str, Any] = Field(default_factory=dict, serialization_alias="input")
     status: str
     progress: int
     error: str | None
@@ -120,6 +123,8 @@ class TaskRead(BaseModel):
     trace_id: str | None
     metadata_: dict[str, Any] = Field(serialization_alias="metadata")
     created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
 
 
 class TaskCreate(BaseModel):
@@ -127,6 +132,12 @@ class TaskCreate(BaseModel):
     conversation_id: UUID | None = None
     trace_id: str | None = Field(default=None, max_length=80)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentTaskCreate(BaseModel):
+    prompt: str = Field(min_length=1, max_length=20_000)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    conversation_id: UUID | None = None
 
 
 class TaskUpdate(BaseModel):

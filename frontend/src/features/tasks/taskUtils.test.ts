@@ -1,0 +1,48 @@
+import { describe, expect, it } from "vitest";
+
+import type { Task } from "../../types";
+import { isTaskTerminal, taskEvents, taskProgress, taskResultAnswer } from "./taskUtils";
+
+function makeTask(overrides: Partial<Task> = {}): Task {
+  return {
+    id: "task-1",
+    conversation_id: "conversation-1",
+    name: "Background task",
+    kind: "agent",
+    input: { prompt: "Analyze" },
+    status: "running",
+    progress: 50,
+    error: null,
+    result: null,
+    trace_id: null,
+    metadata: {},
+    created_at: "2026-08-19T00:00:00Z",
+    started_at: null,
+    finished_at: null,
+    ...overrides
+  };
+}
+
+describe("task helpers", () => {
+  it("recognizes terminal states", () => {
+    expect(isTaskTerminal("succeeded")).toBe(true);
+    expect(isTaskTerminal("cancelled")).toBe(true);
+    expect(isTaskTerminal("running")).toBe(false);
+  });
+
+  it("clamps progress for accessible rendering", () => {
+    expect(taskProgress(-10)).toBe(0);
+    expect(taskProgress(45)).toBe(45);
+    expect(taskProgress(120)).toBe(100);
+  });
+
+  it("filters malformed events and exposes a non-empty answer", () => {
+    const task = makeTask({
+      metadata: { events: [{ type: "plan" }, null, "bad"] },
+      result: { answer: "Done" }
+    });
+
+    expect(taskEvents(task)).toEqual([{ type: "plan" }]);
+    expect(taskResultAnswer(task)).toBe("Done");
+  });
+});

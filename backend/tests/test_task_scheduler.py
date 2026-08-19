@@ -1,9 +1,10 @@
+import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from app.services.task_scheduler import STALE_TASK_ERROR, recover_stale_running_tasks
+from app.services.task_scheduler import STALE_TASK_ERROR, TaskScheduler, recover_stale_running_tasks
 
 
 class FakeResult:
@@ -70,3 +71,34 @@ async def test_recover_stale_running_tasks_preserves_terminal_tasks() -> None:
     assert failed.error == "boom"
     assert cancelled.status == "cancelled"
     assert session.committed is False
+
+
+class WaitingRunner:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def run(self, task_id) -> None:
+        self.started.set()
+        await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_prevents_duplicate_jobs_and_cancels_running_job() -> None:
+    runner = WaitingRunner()
+    scheduler = TaskScheduler(runner=runner)  # type: ignore[arg-type]
+    task_id = uuid4()
+
+    assert scheduler.enqueue(task_id) is True
+    await runner.started.wait()
+    assert scheduler.enqueue(task_id) is False
+    assert scheduler.cancel(task_id) is True
+    await asyncio.sleep(0)
+    assert scheduler.cancel(task_id) is False
+
+
+def test_scheduler_start_without_event_loop_can_retry_later() -> None:
+    scheduler = TaskScheduler(runner=WaitingRunner())  # type: ignore[arg-type]
+
+    scheduler.start()
+
+    assert scheduler._started is False

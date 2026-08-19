@@ -7,6 +7,7 @@ from app.services.model_gateway import ModelRoute
 
 class AgentGraphState(TypedDict, total=False):
     user_id: UUID | None
+    task_id: UUID | None
     conversation_id: UUID | None
     message: str
     task_type: str
