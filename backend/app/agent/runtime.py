@@ -362,6 +362,9 @@ class AgentRuntime(AgentResponsePolicy):
             )
         if any(item.get("tool_name") == WEB_SEARCH_TOOL_NAME for item in state.tool_calls):
             return AgentToolPlan(no_tool=True, reason="The web has already been searched.")
+        github_plan = self._plan_github_tool(state)
+        if github_plan is not None:
+            return github_plan
         path = self._extract_read_file_path(state.message)
         if path is not None and self._requests_file_read(state.message):
             tool = self.plugin_registry.get("read_file") if self.plugin_registry else None
@@ -375,9 +378,6 @@ class AgentRuntime(AgentResponsePolicy):
                 reason="The user asked to read a local file before answering.",
                 requires_confirmation=bool(tool and tool.manifest.requires_confirmation),
             )
-        github_plan = self._plan_github_tool(state)
-        if github_plan is not None:
-            return github_plan
         fetch_plan = self._plan_fetch_tool(state)
         if fetch_plan is not None:
             return fetch_plan
@@ -445,6 +445,12 @@ class AgentRuntime(AgentResponsePolicy):
         reference = self._extract_github_reference(state.message)
         if reference is None:
             return None
+        if not reference["path"]:
+            requested_path = self._extract_read_file_path(
+                self._message_without_urls(state.message)
+            )
+            if requested_path is not None:
+                reference = {**reference, "path": requested_path.replace("\\", "/")}
         tool = self._find_mcp_tool(MCP_GITHUB_SERVER_NAME, MCP_GITHUB_FILE_TOOL_IDS)
         if tool is None:
             return AgentToolPlan(
