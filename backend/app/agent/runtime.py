@@ -9,6 +9,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.graph import build_agent_graph
+from app.agent.constants import (
+    MCP_FETCH_TOOL_NAME,
+    MCP_GITHUB_FILE_TOOL_IDS,
+    MCP_GITHUB_SERVER_NAME,
+    MCP_HUGGINGFACE_SERVER_NAME,
+    WEB_SEARCH_TOOL_NAME,
+)
+from app.agent.response_policy import AgentResponsePolicy
 from app.agent.state import AgentGraphState
 from app.core.config import get_settings
 from app.core.mcp_security import McpIdentity
@@ -25,11 +33,6 @@ from app.services.plugin_registry import TOOL_PROVIDER_MCP_SERVER, PluginRegistr
 from app.services.rag import Citation, RagService
 from app.services.tool_executor import ToolExecutor
 
-WEB_SEARCH_TOOL_NAME = "web_search"
-MCP_FETCH_TOOL_NAME = "mcp.fetch.fetch"
-MCP_GITHUB_SERVER_NAME = "github"
-MCP_GITHUB_FILE_TOOL_IDS = ("get_file_contents",)
-MCP_HUGGINGFACE_SERVER_NAME = "huggingface"
 FETCH_DEFAULT_MAX_LENGTH = 8000
 SEARCH_FETCH_MAX_PAGES = 3
 FETCH_URL_RE = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
@@ -147,23 +150,7 @@ WEB_SEARCH_QUERY_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 WEB_SEARCH_QUESTION_RE = re.compile(r"\b(who|what|when|where|which|how many|how much)\b")
-RAW_TOOL_PROTOCOL_RE = re.compile(
-    r"<\s*[|｜]*DSML[|｜]*tool_calls\s*>.*?(?:<\s*/\s*[|｜]*DSML[|｜]*tool_calls\s*>|$)"
-    r"|<\s*tool_calls?\s*>.*?(?:<\s*/\s*tool_calls?\s*>|$)"
-    r"|<\s*invoke\b[^>]*>.*?(?:<\s*/\s*invoke\s*>|$)",
-    re.IGNORECASE | re.DOTALL,
-)
-RAW_TOOL_PROTOCOL_MARKERS = (
-    "<｜｜dsml｜｜tool_calls>",
-    "<||dsml||tool_calls>",
-    "<tool_calls>",
-    "<tool_call",
-    "<invoke",
-    "invoke name=",
-)
-
-
-class AgentRuntime:
+class AgentRuntime(AgentResponsePolicy):
     def __init__(
         self,
         session: AsyncSession,
@@ -173,11 +160,13 @@ class AgentRuntime:
         rag_service: RagService | None = None,
         tool_executor: ToolExecutor | None = None,
         max_tool_rounds: int = 3,
+        task_id: UUID | None = None,
     ) -> None:
         self.session = session
         self.plugin_registry = plugin_registry
         self.mcp_client = getattr(plugin_registry, "mcp_client", None)
         self.user_id = user_id
+        self.task_id = task_id
         self.model_gateway = model_gateway or ModelGateway()
         self.rag = rag_service or RagService(session, user_id=user_id)
         self.tool_executor = tool_executor or ToolExecutor()
@@ -188,6 +177,7 @@ class AgentRuntime:
         trace_id = uuid4().hex
         state: AgentGraphState = {
             "user_id": self.user_id,
+            "task_id": self.task_id,
             "conversation_id": request.conversation_id,
             "message": request.message,
             "task_type": request.task_type,
@@ -220,6 +210,7 @@ class AgentRuntime:
         trace_id = uuid4().hex
         state: AgentGraphState = {
             "user_id": self.user_id,
+            "task_id": self.task_id,
             "conversation_id": request.conversation_id,
             "message": request.message,
             "task_type": request.task_type,
@@ -325,200 +316,6 @@ class AgentRuntime:
             for tool in self.plugin_registry.list_tools()
             if tool.manifest.enabled
         ]
-
-    def _sanitize_model_answer(self, answer: str, message: str) -> str:
-        if not self._contains_raw_tool_protocol(answer):
-            return answer
-        cleaned = RAW_TOOL_PROTOCOL_RE.sub("", answer)
-        cleaned = "\n".join(
-            line
-            for line in cleaned.splitlines()
-            if not self._contains_raw_tool_protocol(line)
-        ).strip()
-        if cleaned:
-            return cleaned + ("\n" if answer.endswith("\n") else "")
-        return self._fallback_answer_after_protocol_strip(message)
-
-    def _contains_raw_tool_protocol(self, text: str) -> bool:
-        lowered = text.lower()
-        return any(marker in lowered for marker in RAW_TOOL_PROTOCOL_MARKERS)
-
-    def _fallback_answer_after_protocol_strip(self, message: str) -> str:
-        lowered = message.lower()
-        asks_project_capability = (
-            "agentdemo" in lowered
-            or "\u9879\u76ee" in message
-            or "\u80fd\u505a\u4ec0\u4e48" in message
-        )
-        if self._message_has_cjk(message) and asks_project_capability:
-            return (
-                "AgentDemo 可以通过聊天界面完成问答、计划执行和知识库检索，并把运行状态实时流式展示出来。"
-                "它支持通过安全的工具执行链路调用本地工具、MCP 工具、网页抓取和联网搜索。"
-                "前端还会展示计划、工具历史和最终回答，方便用户确认系统每一步做了什么。"
-            )
-        if self._message_has_cjk(message):
-            return "我拦截了模型生成的内部工具调用标记；请换一种方式重试这个请求。"
-        return "I blocked internal tool-call markup from the model response. Please retry the request."
-
-    def _tool_availability_answer(self, message: str) -> str | None:
-        lowered = message.lower()
-        tools = self._available_tools()
-        if not tools:
-            if self._requests_tool_inventory(lowered):
-                return "\u5f53\u524d\u6ca1\u6709\u5df2\u52a0\u8f7d\u7684\u8fd0\u884c\u65f6\u5de5\u5177\u3002"
-            return None
-
-        matching_tools = [
-            tool for tool in tools if self._tool_matches_message(tool, lowered)
-        ]
-        if matching_tools:
-            if not self._requests_tool_inventory(lowered):
-                return None
-            tool = matching_tools[0]
-            answer = (
-                f"\u6709\uff0c\u6211\u5df2\u7ecf\u52a0\u8f7d\u4e86 `{tool.manifest.name}` "
-                f"\u5de5\u5177\u3002\u7528\u9014\uff1a{tool.manifest.description}"
-            )
-            if tool.manifest.name == WEB_SEARCH_TOOL_NAME:
-                answer += (
-                    "\u3002\u5b83\u53ef\u4ee5\u88ab\u81ea\u52a8\u89e6\u53d1\u6216\u76f4\u63a5\u8c03\u7528\uff0c"
-                    "\u4f46\u771f\u5b9e\u8054\u7f51\u641c\u7d22\u8fd8\u9700\u8981\u5728\u540e\u7aef `.env` "
-                    "\u91cc\u914d\u7f6e `WEB_SEARCH_PROVIDER` \u548c\u5bf9\u5e94 API key\u3002"
-                )
-            return answer
-
-        if self._requests_tool_inventory(lowered):
-            names = ", ".join(f"`{tool.manifest.name}`" for tool in tools)
-            return f"\u5f53\u524d\u5df2\u52a0\u8f7d\u7684\u5de5\u5177\u6709\uff1a{names}\u3002"
-        return None
-
-    def _tool_failure_answer(self, state: AgentExecutionState) -> str | None:
-        if not state.tool_calls:
-            return None
-        latest = state.tool_calls[-1]
-        search_fallback = self._search_results_fallback_answer(state)
-        if search_fallback is not None:
-            return search_fallback
-        if latest.get("tool_name") != WEB_SEARCH_TOOL_NAME:
-            return None
-        result = latest.get("result")
-        if not isinstance(result, dict):
-            return None
-        status = str(result.get("status") or "")
-        if status == "success":
-            return None
-        error = str(result.get("error") or status or "unknown error")
-        if self._message_has_cjk(state.message):
-            return (
-                "\u6211\u6ca1\u80fd\u5b8c\u6210\u8fd9\u6b21\u8054\u7f51\u641c\u7d22\uff1a"
-                f"{error}\n\n"
-                "\u56e0\u4e3a\u6ca1\u6709\u6210\u529f\u83b7\u53d6\u641c\u7d22\u7ed3\u679c\uff0c"
-                "\u6211\u4e0d\u4f1a\u7f16\u9020\u4eca\u5929\u7684\u65b0\u95fb\u6458\u8981\u3002"
-                "\u8bf7\u5728\u540e\u7aef\u914d\u7f6e `WEB_SEARCH_PROVIDER` \u548c\u5bf9\u5e94"
-                " `WEB_SEARCH_API_KEY` \u540e\u91cd\u8bd5\u3002"
-            )
-        return (
-            f"I could not complete the web search: {error}\n\n"
-            "Because no search results were retrieved, I will not invent a news summary. "
-            "Configure `WEB_SEARCH_PROVIDER` and the matching `WEB_SEARCH_API_KEY` on the "
-            "backend, then try again."
-        )
-
-    def _message_has_cjk(self, message: str) -> bool:
-        return any("\u4e00" <= char <= "\u9fff" for char in message)
-
-    def _search_results_fallback_answer(self, state: AgentExecutionState) -> str | None:
-        search_call = self._latest_successful_web_search_call(state)
-        if search_call is None:
-            return None
-        enrichment_calls = [
-            item
-            for item in state.tool_calls
-            if item.get("tool_name") == MCP_FETCH_TOOL_NAME and item.get("search_enrichment")
-        ]
-        if not enrichment_calls:
-            return None
-        if any(
-            isinstance(item.get("result"), dict)
-            and item["result"].get("status") == "success"
-            for item in enrichment_calls
-        ):
-            return None
-        result = search_call.get("result")
-        if not isinstance(result, dict):
-            return None
-        output = result.get("output")
-        results = self._search_result_items(output)[:5]
-        if not results:
-            return None
-        provider = "web_search"
-        if isinstance(output, dict):
-            provider = str(output.get("provider") or provider)
-        lines: list[str] = []
-        for index, item in enumerate(results, start=1):
-            if not isinstance(item, dict):
-                continue
-            title = str(item.get("title") or "Untitled").strip()
-            snippet = str(item.get("snippet") or "").strip()
-            url = str(item.get("url") or "").strip()
-            if self._message_has_cjk(state.message):
-                line = f"{index}. {title}"
-                if snippet:
-                    line += f"\n   摘要：{snippet}"
-                if url:
-                    line += f"\n   来源：{url}"
-            else:
-                line = f"{index}. {title}"
-                if snippet:
-                    line += f"\n   Summary: {snippet}"
-                if url:
-                    line += f"\n   Source: {url}"
-            lines.append(line)
-        if not lines:
-            return None
-        if self._message_has_cjk(state.message):
-            return (
-                f"我已经完成 {provider} 搜索，但搜索结果网页正文全部抓取失败，"
-                "所以先基于搜索结果标题、摘要和来源链接给你一个降级版总结：\n\n"
-                + "\n\n".join(lines)
-                + "\n\n注意：以上不是网页正文深度分析；请稍后重试网页抓取或更换可访问来源。"
-            )
-        return (
-            f"The {provider} search succeeded, but every search-result page fetch failed. "
-            "Here is a fallback summary from the search titles, snippets, and source URLs:\n\n"
-            + "\n\n".join(lines)
-            + "\n\nNote: this is not a full page-body analysis; retry fetching later or use accessible sources."
-        )
-
-    def _latest_successful_web_search_call(self, state: AgentExecutionState) -> dict | None:
-        for item in reversed(state.tool_calls):
-            if item.get("tool_name") != WEB_SEARCH_TOOL_NAME:
-                continue
-            result = item.get("result")
-            if isinstance(result, dict) and result.get("status") == "success":
-                return item
-        return None
-
-    def _requests_tool_inventory(self, lowered_message: str) -> bool:
-        return (
-            bool(re.search(r"\b(available|exists|have|check|list)\b", lowered_message))
-            or bool(re.search(r"\btools?\b", lowered_message))
-            or any(
-                term in lowered_message
-                for term in ("\u5de5\u5177", "\u6709\u6ca1\u6709", "\u6709\u65e0", "\u662f\u5426", "\u68c0\u67e5", "\u5217\u51fa", "\u54ea\u4e9b")
-            )
-        )
-
-    def _tool_matches_message(self, tool, lowered_message: str) -> bool:
-        identifiers = {
-            tool.manifest.name.lower(),
-            str(tool.provider_tool_id or "").lower(),
-            str(tool.server_name or "").lower(),
-        }
-        if tool.server_name:
-            identifiers.add(f"{tool.server_name.lower()} mcp")
-            identifiers.add(f"mcp {tool.server_name.lower()}")
-        return any(identifier and identifier in lowered_message for identifier in identifiers)
 
     async def _save_assistant_message(self, state: AgentExecutionState, route) -> None:
         if state.conversation_id is None:
@@ -798,6 +595,7 @@ class AgentRuntime:
             session=self.session,
             user_id=state.user_id,
             conversation_id=state.conversation_id,
+            task_id=state.task_id,
             identity=McpIdentity(user_id=state.user_id),
         )
 
@@ -851,6 +649,7 @@ class AgentRuntime:
                 session=self.session,
                 user_id=state.user_id,
                 conversation_id=state.conversation_id,
+                task_id=state.task_id,
                 identity=McpIdentity(user_id=state.user_id),
             )
             state.tool_calls.append(

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -85,7 +85,7 @@ async def test_keyword_fallback_keeps_score_when_embedding_unavailable() -> None
         source_type="text",
         source_uri=None,
         status="indexed",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
     chunk = KnowledgeChunk(
         id=uuid4(),
@@ -117,7 +117,7 @@ async def test_conversation_documents_are_prioritized_over_global_keyword_result
         source_type="text",
         source_uri=None,
         status="indexed",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
     global_document = KnowledgeDocument(
         id=uuid4(),
@@ -126,7 +126,7 @@ async def test_conversation_documents_are_prioritized_over_global_keyword_result
         source_type="text",
         source_uri=None,
         status="indexed",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
     local_chunk = KnowledgeChunk(
         id=uuid4(),

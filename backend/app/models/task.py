@@ -1,7 +1,8 @@
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,6 +14,9 @@ TASK_STATUS_SUCCEEDED = "succeeded"
 TASK_STATUS_FAILED = "failed"
 TASK_STATUS_CANCELLED = "cancelled"
 TASK_STATUS_STALE = "stale"
+
+TASK_KIND_MANUAL = "manual"
+TASK_KIND_AGENT = "agent"
 
 TASK_STATUSES = {
     TASK_STATUS_QUEUED,
@@ -69,9 +73,13 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         PgUUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), index=True
     )
     name: Mapped[str] = mapped_column(String(200))
+    kind: Mapped[str] = mapped_column(String(32), default=TASK_KIND_MANUAL, index=True)
+    input_: Mapped[dict[str, Any]] = mapped_column("input", JSONB, default=dict)
     status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
     progress: Mapped[int] = mapped_column(default=0)
     error: Mapped[str | None] = mapped_column(Text)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     trace_id: Mapped[str | None] = mapped_column(String(80), index=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

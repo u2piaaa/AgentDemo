@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,12 +8,14 @@ from app.api.routes.auth import CurrentUser
 from app.db.database import get_session
 from app.models.conversation import Conversation
 from app.models.task import (
+    TASK_KIND_AGENT,
+    TASK_KIND_MANUAL,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_QUEUED,
     Task,
     is_valid_task_status_transition,
 )
-from app.schemas import TaskCreate, TaskRead, TaskUpdate
+from app.schemas import AgentTaskCreate, TaskCreate, TaskRead, TaskUpdate
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -51,6 +53,8 @@ async def create_task(
 
     task = Task(
         name=payload.name,
+        kind=TASK_KIND_MANUAL,
+        input_={},
         user_id=current_user.id,
         conversation_id=payload.conversation_id,
         status=TASK_STATUS_QUEUED,
@@ -61,6 +65,41 @@ async def create_task(
     session.add(task)
     await session.commit()
     await session.refresh(task)
+    return task
+
+
+@router.post("/agent", response_model=TaskRead, status_code=202)
+async def create_agent_task(
+    payload: AgentTaskCreate,
+    request: Request,
+    current_user: CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> Task:
+    if payload.conversation_id is not None:
+        conversation = await get_owned_conversation(
+            session, payload.conversation_id, current_user.id
+        )
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+    prompt = payload.prompt.strip()
+    task = Task(
+        name=(payload.name or _agent_task_name(prompt)).strip(),
+        kind=TASK_KIND_AGENT,
+        input_={"prompt": prompt},
+        user_id=current_user.id,
+        conversation_id=payload.conversation_id,
+        status=TASK_STATUS_QUEUED,
+        progress=0,
+        metadata_={"events": []},
+    )
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+
+    scheduler = getattr(request.app.state, "task_scheduler", None)
+    if scheduler is not None:
+        scheduler.enqueue(task.id)
     return task
 
 
@@ -119,6 +158,7 @@ async def update_task(
 @router.post("/{task_id}/cancel", response_model=TaskRead)
 async def cancel_task(
     task_id: UUID,
+    request: Request,
     current_user: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ) -> Task:
@@ -129,6 +169,9 @@ async def cancel_task(
     task.status = TASK_STATUS_CANCELLED
     await session.commit()
     await session.refresh(task)
+    scheduler = getattr(request.app.state, "task_scheduler", None)
+    if scheduler is not None:
+        scheduler.cancel(task.id)
     return task
 
 
@@ -161,3 +204,8 @@ async def get_owned_task(session: AsyncSession, task_id: UUID, user_id: UUID) ->
         )
     )
     return result.scalar_one_or_none()
+
+
+def _agent_task_name(prompt: str) -> str:
+    first_line = next((line.strip() for line in prompt.splitlines() if line.strip()), "Agent task")
+    return first_line[:80]

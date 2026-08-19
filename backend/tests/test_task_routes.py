@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from app.api.routes import tasks
 from app.api.routes.auth import get_current_user
 from app.db.database import get_session
-from app.schemas import TaskCreate, TaskUpdate
+from app.schemas import AgentTaskCreate, TaskCreate, TaskUpdate
 
 
 class FakeResult:
@@ -77,8 +77,10 @@ def make_task(user_id: UUID, conversation_id: UUID | None = None):
     )
 
 
-def make_client(session: FakeSession, user=None) -> TestClient:
+def make_client(session: FakeSession, user=None, scheduler=None) -> TestClient:
     app = FastAPI()
+    if scheduler is not None:
+        app.state.task_scheduler = scheduler
     app.include_router(tasks.router, prefix="/api")
     app.dependency_overrides[get_session] = lambda: session
     if user is not None:
@@ -92,6 +94,13 @@ def test_task_payload_defaults() -> None:
     assert payload.conversation_id is None
     assert payload.trace_id is None
     assert payload.metadata == {}
+
+
+def test_agent_task_payload_defaults() -> None:
+    payload = AgentTaskCreate(prompt="Run a background analysis")
+
+    assert payload.name is None
+    assert payload.conversation_id is None
 
 
 def test_task_update_accepts_progress() -> None:
@@ -112,6 +121,7 @@ def test_task_update_rejects_unknown_status() -> None:
     [
         ("GET", "/api/tasks", None),
         ("POST", "/api/tasks", {"name": "Index document"}),
+        ("POST", "/api/tasks/agent", {"prompt": "Run a background analysis"}),
         ("GET", f"/api/tasks/{uuid4()}", None),
         ("PATCH", f"/api/tasks/{uuid4()}", {"progress": 20}),
         ("POST", f"/api/tasks/{uuid4()}/cancel", None),
@@ -226,6 +236,43 @@ def test_create_task_accepts_trace_id() -> None:
     assert session.added.trace_id == "trace-create"
 
 
+class FakeScheduler:
+    def __init__(self) -> None:
+        self.enqueued = []
+        self.cancelled = []
+
+    def enqueue(self, task_id) -> bool:
+        self.enqueued.append(task_id)
+        return True
+
+    def cancel(self, task_id) -> bool:
+        self.cancelled.append(task_id)
+        return True
+
+
+def test_create_agent_task_enqueues_owned_conversation() -> None:
+    user = SimpleNamespace(id=uuid4())
+    conversation_id = uuid4()
+    conversation = SimpleNamespace(id=conversation_id, user_id=user.id)
+    session = FakeSession(
+        results=[FakeResult(scalar=conversation)],
+        expected_filters=[("conversations.user_id", user.id)],
+    )
+    scheduler = FakeScheduler()
+    client = make_client(session, user, scheduler)
+
+    response = client.post(
+        "/api/tasks/agent",
+        json={"prompt": "Analyze the current project", "conversation_id": str(conversation_id)},
+    )
+
+    assert response.status_code == 202
+    assert session.added.kind == "agent"
+    assert session.added.input_ == {"prompt": "Analyze the current project"}
+    assert session.added.user_id == user.id
+    assert scheduler.enqueued == [session.added.id]
+
+
 def test_get_task_rejects_other_users_task() -> None:
     user = SimpleNamespace(id=uuid4())
     session = FakeSession(
@@ -308,7 +355,8 @@ def test_cancel_task_allows_owner() -> None:
         results=[FakeResult(scalar=task)],
         expected_filters=[("tasks.user_id", user.id)],
     )
-    client = make_client(session, user)
+    scheduler = FakeScheduler()
+    client = make_client(session, user, scheduler)
 
     response = client.post(f"/api/tasks/{task.id}/cancel")
 
@@ -316,6 +364,7 @@ def test_cancel_task_allows_owner() -> None:
     assert response.json()["status"] == "cancelled"
     assert task.status == "cancelled"
     assert session.committed is True
+    assert scheduler.cancelled == [task.id]
 
 
 def test_cancel_task_rejects_other_users_task() -> None:

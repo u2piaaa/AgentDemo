@@ -1,8 +1,8 @@
-# Personal Agent
+# AgentDemo Personal Agent
 
 Local-first personal AI agent scaffold with a FastAPI backend, React + Vite
 frontend, PostgreSQL + pgvector storage, local manifest-based plugins, RAG, and
-light durable task tracking.
+durable foreground and background agent execution.
 
 The current runtime is an executable agent loop rather than a plain chat proxy:
 it persists conversation state, retrieves relevant knowledge, plans tool calls,
@@ -13,7 +13,9 @@ saves the final assistant message with trace metadata.
 
 - `backend/app/main.py`: FastAPI application startup, route mounting, scheduler
   startup, and plugin registry loading.
-- `backend/app/agent/runtime.py`: executable streaming agent runtime.
+- `backend/app/agent/runtime.py`: executable LangGraph streaming runtime.
+- `backend/app/agent/response_policy.py`: user-visible response sanitization,
+  tool inventory, and search/tool fallback policies.
 - `backend/app/api/routes`: authenticated API routes for auth, conversations,
   tools, tasks, knowledge, and memory summaries.
 - `backend/app/services/model_gateway.py`: OpenAI-compatible embedding and chat
@@ -23,11 +25,15 @@ saves the final assistant message with trace metadata.
 - `backend/app/services/plugin_registry.py`: local plugin manifest loader.
 - `backend/app/services/tool_executor.py`: argument validation, confirmation
   gate, timeout handling, output limiting, and tool-call audit logging.
-- `backend/app/services/task_scheduler.py`: startup recovery for running tasks.
+- `backend/app/services/agent_task_runner.py`: durable background agent worker
+  with persisted progress, results, cancellation, and tool audit binding.
+- `backend/app/services/task_scheduler.py`: in-process job scheduling, queued-job
+  resume, cancellation, and startup recovery.
 - `backend/migrations`: Alembic schema, including `pgvector`, task ownership,
   tool-call audit fields, knowledge documents, and memory summaries.
-- `frontend/src`: chat workspace, SSE client, task panel, tool panels, citations,
-  auth flow, and knowledge upload UI.
+- `frontend/src/features`: extracted runtime-trace and background-task UI logic.
+- `frontend/src`: chat workspace, SSE client, tool panels, citations, auth flow,
+  and knowledge upload UI.
 - `plugins/read_file`: sample local plugin.
 - `docs`: implementation notes, plugin authoring, testing strategy, and final
   regression checklist.
@@ -53,10 +59,10 @@ At a high level the runtime does this for each user message:
 10. Refresh the active long-term memory summary when the conversation has grown
     past the configured recent-history window.
 
-The initial planner is intentionally small and deterministic. It detects local
-file-reading requests and dispatches the `read_file` plugin when appropriate.
-The surrounding runtime boundary is ready for a richer planner or LangGraph node
-wiring without changing the API contract.
+Planning combines deterministic routes for direct URLs, GitHub, Hugging Face,
+search, and local file requests with model-driven MCP/tool selection. LangGraph
+coordinates retrieval, bounded multi-round tool execution, response generation,
+and persistence without changing the public SSE contract.
 
 ## Tool Call Flow
 
@@ -118,18 +124,28 @@ Supported operations:
 - `GET /api/tasks?conversation_id=<uuid>` lists owned tasks.
 - `POST /api/tasks` creates a queued task with optional conversation id, trace
   id, and metadata.
+- `POST /api/tasks/agent` creates and immediately enqueues an autonomous agent
+  task from a prompt, with an optional name and conversation id.
 - `GET /api/tasks/{task_id}` returns an owned task.
 - `PATCH /api/tasks/{task_id}` updates status, progress, result, error, trace id,
   or metadata.
 - `POST /api/tasks/{task_id}/cancel` moves a cancellable task to `cancelled`.
 
 Statuses are `queued`, `running`, `succeeded`, `failed`, `cancelled`, and
-`stale`. Terminal states stay terminal. On backend startup,
-`TaskScheduler.recover_stale_running_tasks()` marks previously running tasks as
-`stale`, which prevents old in-flight work from looking active after a restart.
+`stale`. Terminal states stay terminal. The scheduler resumes queued agent tasks
+after startup and marks interrupted running tasks as `stale`. Each background
+run persists coarse-grained runtime events, the final answer, citations, model
+route, timestamps, and a progress percentage. Tool calls retain the task id in
+the normal `ToolExecutor` audit path.
 
-The frontend polls task state for the active conversation and supports local
-cancel requests through the cancel endpoint.
+Background execution uses separate database sessions for task progress and the
+LangGraph runtime. Tools that require interactive confirmation fail safely with
+guidance to use chat; they are never auto-approved. The frontend can launch a
+background run from the composer and renders progress, result text, failure
+details, and cancellation controls in the task panel.
+
+See [Agent Architecture and Roadmap](docs/agent-architecture-roadmap.md) for the
+implemented capability map and next-stage priorities.
 
 ## RAG And Memory
 
@@ -275,6 +291,8 @@ Backend:
 ```powershell
 cd D:\workplace\AgentDemo\backend
 .\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pytest --cov=app --cov-fail-under=70
+.\.venv\Scripts\python.exe -m ruff check app tests
 ```
 
 Frontend:
@@ -282,7 +300,9 @@ Frontend:
 ```powershell
 cd D:\workplace\AgentDemo\frontend
 npm ci
+npm test
 npm run build
+npm audit --audit-level=high
 ```
 
 Lightweight documentation check:
@@ -298,7 +318,9 @@ handoff checklist.
 
 ## Known Limitations
 
-- Current frontend dependency audit reports 2 moderate vulnerabilities in
-  existing dependencies.
-- Repository private status cannot be verified from local agent work alone; check
-  it in GitHub repository settings.
+- Background workers are in-process. Queued work resumes after a clean restart,
+  but multi-instance execution still needs distributed leases or a queue.
+- Confirmation-required tools remain an interactive-chat workflow; background
+  tasks deliberately do not pause indefinitely for approval.
+- LangGraph coordinates execution, but durable node-level checkpoint/resume is a
+  future capability beyond the current task-level persistence.

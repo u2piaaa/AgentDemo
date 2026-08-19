@@ -11,6 +11,8 @@ Run all backend tests from the backend directory:
 ```powershell
 cd D:\workplace\AgentDemo\backend
 .\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing --cov-fail-under=70
+.\.venv\Scripts\python.exe -m ruff check app tests
 ```
 
 Useful targeted suites:
@@ -20,7 +22,7 @@ Useful targeted suites:
 .\.venv\Scripts\python.exe -m pytest tests/test_plugin_registry.py tests/test_tool_executor.py tests/test_read_file_plugin.py
 .\.venv\Scripts\python.exe -m pytest tests/test_agent_runtime.py tests/test_model_gateway.py
 .\.venv\Scripts\python.exe -m pytest tests/test_rag.py tests/test_memory_routes.py
-.\.venv\Scripts\python.exe -m pytest tests/test_task_scheduler.py
+.\.venv\Scripts\python.exe -m pytest tests/test_task_scheduler.py tests/test_agent_task_runner.py tests/test_task_routes.py
 ```
 
 Backend coverage priorities:
@@ -31,6 +33,8 @@ Backend coverage priorities:
   summaries.
 - Task status transitions reject invalid moves and terminal-state changes.
 - Startup task recovery marks old `running` tasks as `stale`.
+- Background agent tasks persist progress/results, bind tool audits to task ids,
+  cancel cleanly, and fail safely when interactive confirmation is required.
 - Plugin manifests load, disabled tools stay unavailable, and invalid manifests
   do not break registry loading.
 - Tool executor validates arguments, enforces confirmation, caps output, records
@@ -42,18 +46,21 @@ Backend coverage priorities:
 - RAG search works with vector results, keyword fallback, and conversation
   document prioritization.
 
-## Frontend Build
+## Frontend Tests And Build
 
 Run the production build from the frontend directory:
 
 ```powershell
 cd D:\workplace\AgentDemo\frontend
 npm ci
+npm test
 npm run build
+npm audit --audit-level=high
 ```
 
-The build runs `tsc` and `vite build`. It catches type drift in API payloads,
-SSE event handling, task rendering, tool panels, and citation rendering.
+Vitest covers SSE parsing, persisted runtime traces, and task rendering helpers.
+The build runs `tsc` and `vite build`; the audit blocks high-severity dependency
+findings.
 
 For local manual checks:
 
@@ -125,10 +132,9 @@ When README commands or setup guidance changes, also sanity-check the relevant
 command names against `backend/pyproject.toml`, `backend/.env.example`, and
 `frontend/package.json`.
 
-## Known Test Notes
+## Release Gate
 
-- `npm audit` currently reports 2 moderate vulnerabilities in existing frontend
-  dependencies.
-- Some RAG tests emit `datetime.utcnow()` deprecation warnings from existing test
-  fixtures.
-- Repository private visibility cannot be verified by local tests.
+The commands in this document form the release gate: Ruff, the complete backend
+suite with at least 70% coverage, frontend unit tests, production build, and a
+high-severity dependency audit must all pass before merging `test` into `run`.
+Repository visibility is an external release check and should remain private.

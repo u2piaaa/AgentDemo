@@ -18,7 +18,8 @@ def make_tool(
     timeout_seconds: int = 30,
 ) -> RegisteredTool:
     if handler is None:
-        handler = lambda **kwargs: kwargs
+        def handler(**kwargs):
+            return kwargs
     manifest = PluginManifest(
         name="example",
         description="Example tool.",

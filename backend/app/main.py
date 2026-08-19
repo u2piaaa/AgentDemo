@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.mcp_client = McpClientManager(load_mcp_config(settings.mcp_config_path))
     app.state.tool_registry = UnifiedToolRegistry(app.state.plugin_registry, app.state.mcp_client)
     await app.state.tool_registry.refresh_mcp_tools()
-    app.state.task_scheduler = TaskScheduler()
+    app.state.task_scheduler = TaskScheduler(tool_registry=app.state.tool_registry)
     app.state.task_scheduler.start()
     try:
         yield

@@ -30,6 +30,8 @@ Run backend tests:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing --cov-fail-under=70
+.\.venv\Scripts\python.exe -m ruff check app tests
 ```
 
 Minimum targeted fallback if time is tight:
@@ -47,17 +49,17 @@ Install from lockfile and build:
 ```powershell
 cd D:\workplace\AgentDemo\frontend
 npm ci
+npm test
 npm run build
 ```
 
 Run audit and record the current result:
 
 ```powershell
-npm audit
+npm audit --audit-level=high
 ```
 
-Known current note: `npm audit` reports 2 moderate vulnerabilities in existing
-dependencies.
+Expected: unit tests and build pass, and the audit has no high-severity findings.
 
 ## Git Hygiene
 
@@ -108,9 +110,10 @@ With backend and frontend running:
    `tool_result`, and final answer are shown.
 6. Upload a TXT or Markdown document and verify citations appear when asking
    about its content.
-7. Create or view tasks for the active conversation and verify polling updates
-   the task panel.
-8. Cancel a cancellable task and verify it becomes `cancelled`.
+7. Launch a background agent task from the composer and verify queued/running
+   progress, persisted events, result text, and task-bound tool audit data.
+8. Cancel a running background task and verify it becomes `cancelled` with a
+   completion timestamp.
 9. Restart the backend with a manually created `running` task and verify startup
    recovery marks it `stale`.
 10. Confirm a tool requiring confirmation is shown as blocked, then approve it
@@ -132,8 +135,9 @@ With backend and frontend running:
 17. Verify the frontend MCP panel handles empty, connected, and error states
     without breaking chat.
 
-## Known Release Notes
+## Release Notes To Record
 
-- `npm audit` currently reports 2 moderate vulnerabilities.
-- Repository private status cannot be verified by the local agent. Confirm it in
-  GitHub repository settings.
+- Exact backend and frontend test counts and coverage.
+- Migration head and real background-task smoke results.
+- GitHub repository visibility and pushed `test` / `run` commit ids.
+- Browser viewport, console, and overflow checks.

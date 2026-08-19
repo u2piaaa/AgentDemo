@@ -86,6 +86,8 @@ export type Task = {
   id: string;
   conversation_id: string | null;
   name: string;
+  kind: "manual" | "agent" | string;
+  input: Record<string, unknown>;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "stale" | string;
   progress: number;
   error: string | null;
@@ -93,6 +95,8 @@ export type Task = {
   trace_id: string | null;
   metadata?: Record<string, unknown>;
   created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 };
 
 export type AgentPlanData = {

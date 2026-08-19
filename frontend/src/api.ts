@@ -13,10 +13,11 @@ import type {
   ToolResultData,
   User
 } from "./types";
+import { readBrowserStorage, removeBrowserStorage, writeBrowserStorage } from "./lib/browserStorage";
 
 const jsonHeaders = { "Content-Type": "application/json" };
-let authToken = localStorage.getItem("agent_auth_token") ?? "";
-let accessToken = localStorage.getItem("agent_access_token") ?? "";
+let authToken = readBrowserStorage("agent_auth_token");
+let accessToken = readBrowserStorage("agent_access_token");
 
 function accessHeaders(token = accessToken): Record<string, string> {
   return token ? { "x-agent-access-token": token } : {};
@@ -35,22 +36,22 @@ function jsonAuthHeaders(): Record<string, string> {
 
 export function setAuthToken(token: string) {
   authToken = token;
-  localStorage.setItem("agent_auth_token", token);
+  writeBrowserStorage("agent_auth_token", token);
 }
 
 export function clearAuthToken() {
   authToken = "";
-  localStorage.removeItem("agent_auth_token");
+  removeBrowserStorage("agent_auth_token");
 }
 
 export function setAccessToken(token: string) {
   accessToken = token;
-  localStorage.setItem("agent_access_token", token);
+  writeBrowserStorage("agent_access_token", token);
 }
 
 export function clearAccessToken() {
   accessToken = "";
-  localStorage.removeItem("agent_access_token");
+  removeBrowserStorage("agent_access_token");
 }
 
 export async function getAuthStatus(): Promise<{ required: boolean }> {
@@ -193,6 +194,19 @@ export async function getTasks(conversationId: string | null): Promise<Task[]> {
   const query = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : "";
   const response = await fetch(`/api/tasks${query}`, { headers: authHeaders() });
   if (!response.ok) throw new Error(await readError(response, "Failed to load tasks"));
+  return response.json();
+}
+
+export async function createAgentTask(
+  prompt: string,
+  conversationId: string | null
+): Promise<Task> {
+  const response = await fetch("/api/tasks/agent", {
+    method: "POST",
+    headers: jsonAuthHeaders(),
+    body: JSON.stringify({ prompt, conversation_id: conversationId })
+  });
+  if (!response.ok) throw new Error(await readError(response, "Failed to create background task"));
   return response.json();
 }
 

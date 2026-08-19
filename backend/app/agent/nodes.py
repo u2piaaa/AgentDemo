@@ -164,6 +164,7 @@ class AgentGraphNodes:
 def graph_state_to_execution_state(state: AgentGraphState) -> AgentExecutionState:
     return AgentExecutionState(
         user_id=state.get("user_id"),
+        task_id=state.get("task_id"),
         conversation_id=state.get("conversation_id"),
         message=state["message"],
         history=list(state.get("history", [])),
