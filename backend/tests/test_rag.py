@@ -76,6 +76,41 @@ def test_mcp_resource_citation_includes_source_uri() -> None:
 
 
 @pytest.mark.asyncio
+async def test_vector_search_drops_low_similarity_results() -> None:
+    document = KnowledgeDocument(
+        id=uuid4(),
+        title="Unrelated notes",
+        source_type="text",
+        source_uri=None,
+        status="indexed",
+    )
+    chunk = KnowledgeChunk(
+        id=uuid4(),
+        document_id=document.id,
+        chunk_index=0,
+        content="An unrelated project fact.",
+    )
+    service = RagService(session=FakeSession([(chunk, document, 0.7)]))  # type: ignore[arg-type]
+
+    async def embeddings(texts: list[str]) -> list[list[float]]:
+        return [[0.1, 0.2]]
+
+    service._embed_or_empty = embeddings  # type: ignore[method-assign]
+
+    citations = await service._search_by_vector("simple arithmetic", None, limit=4)
+
+    assert citations == []
+
+
+def test_conversation_context_fallback_requires_document_intent() -> None:
+    service = RagService(session=None)  # type: ignore[arg-type]
+
+    assert service._requests_conversation_context("Use the uploaded document") is True
+    assert service._requests_conversation_context("只根据这份资料回答") is True
+    assert service._requests_conversation_context("What is nine times nine?") is False
+
+
+@pytest.mark.asyncio
 async def test_keyword_fallback_keeps_score_when_embedding_unavailable() -> None:
     conversation_id = uuid4()
     document = KnowledgeDocument(

@@ -9,6 +9,28 @@ from app.schemas import KnowledgeDocumentCreate
 from app.services.model_gateway import ModelGateway
 
 
+MIN_VECTOR_SCORE = 0.45
+CONVERSATION_CONTEXT_TERMS = (
+    "attachment",
+    "context",
+    "document",
+    "file",
+    "knowledge",
+    "notes",
+    "provided",
+    "uploaded",
+    "上传",
+    "上下文",
+    "文档",
+    "文件",
+    "材料",
+    "知识",
+    "笔记",
+    "资料",
+    "附件",
+)
+
+
 @dataclass(frozen=True)
 class Citation:
     document_id: str
@@ -82,7 +104,7 @@ class RagService:
         keyword_results = await self._search_by_keywords(query, conversation_id, limit)
         if keyword_results:
             return keyword_results
-        if conversation_id is not None:
+        if conversation_id is not None and self._requests_conversation_context(query):
             conversation_context = await self._conversation_document_context(conversation_id, limit)
             if conversation_context:
                 return conversation_context
@@ -108,15 +130,20 @@ class RagService:
         )
         statement = self._scope_statement(statement, conversation_id, include_global)
         result = await self.session.execute(statement)
-        return [
-            self._citation(
-                chunk,
-                document,
-                score=self._vector_score(raw_distance),
-                retrieval_method="vector",
+        citations = []
+        for chunk, document, raw_distance in result.all():
+            score = self._vector_score(raw_distance)
+            if score < MIN_VECTOR_SCORE:
+                continue
+            citations.append(
+                self._citation(
+                    chunk,
+                    document,
+                    score=score,
+                    retrieval_method="vector",
+                )
             )
-            for chunk, document, raw_distance in result.all()
-        ]
+        return citations
 
     async def _search_by_keywords(
         self,
@@ -229,6 +256,10 @@ class RagService:
         if distance is None:
             return 0.0
         return max(0.0, 1.0 - float(distance))
+
+    def _requests_conversation_context(self, query: str) -> bool:
+        lowered = query.casefold()
+        return any(term in lowered for term in CONVERSATION_CONTEXT_TERMS)
 
     async def _embed_or_empty(self, texts: list[str]) -> list[list[float]]:
         try:
