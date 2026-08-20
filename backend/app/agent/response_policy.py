@@ -246,14 +246,28 @@ class AgentResponsePolicy:
         return None
 
     def _requests_tool_inventory(self, lowered_message: str) -> bool:
-        return (
-            bool(re.search(r"\b(available|exists|have|check|list)\b", lowered_message))
-            or bool(re.search(r"\btools?\b", lowered_message))
-            or any(
-                term in lowered_message
-                for term in ("工具", "有没有", "有无", "是否", "检查", "列出", "哪些")
-            )
+        english_patterns = (
+            r"\b(?:what|which)\s+(?:runtime\s+)?tools?\b",
+            r"\b(?:list|show|check)\s+(?:the\s+)?"
+            r"(?:(?:available|installed|loaded|runtime)\s+)?tools?\b",
+            r"\b(?:available|installed|loaded)\s+(?:runtime\s+)?tools?\b",
+            r"\b(?:do|does)\s+(?:you|agentdemo|the\s+runtime|this\s+agent)"
+            r".{0,40}\b(?:have|support)\b.{0,40}\btools?\b",
+            r"\bdo\s+you\s+(?:have|support)\s+[\w.:-]+\b",
+            r"\b(?:is|are)\s+[\w.:-]+\s+(?:tool\s+)?"
+            r"(?:available|installed|loaded)\b",
         )
+        if any(re.search(pattern, lowered_message) for pattern in english_patterns):
+            return True
+        if "工具" not in lowered_message:
+            return False
+        chinese_patterns = (
+            r"(?:有哪些|有什么|哪些|列出|列一下|展示|显示|查看|检查).{0,30}工具",
+            r"工具.{0,12}(?:有哪些|有什么|哪些|列表|清单|是否可用|能否使用)",
+            r"(?:有没有|有无|是否有|是否支持|支持哪些).{0,30}工具",
+            r"(?:你|系统|项目|agentdemo).{0,12}(?:有|支持).{0,30}工具(?:吗|么|？|\?)?",
+        )
+        return any(re.search(pattern, lowered_message) for pattern in chinese_patterns)
 
     def _tool_matches_message(self, tool, lowered_message: str) -> bool:
         identifiers = {

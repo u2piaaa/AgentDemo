@@ -654,6 +654,33 @@ async def test_runtime_answers_named_tool_availability_deterministically() -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "用一句话回答：2+2等于多少？不要使用工具。",
+        "Answer 2+2 in one sentence without using tools.",
+    ],
+)
+async def test_tool_negation_does_not_trigger_inventory_answer(message: str) -> None:
+    gateway = FakeGateway()
+    session = FakeSession()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=gateway,  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, message)
+
+    assert next(data for name, data in events if name == "plan")["reason"] == (
+        "No tool is needed for this message."
+    )
+    assert assistant_messages(session)[0].content == "plain chat response "
+    assert len(gateway.stream_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_read_file_request_triggers_tool_and_influences_answer() -> None:
     session = FakeSession()
     gateway = FakeGateway()
