@@ -234,6 +234,8 @@ class ToolExecutor:
             return None
         if isinstance(output, str):
             text = output
+        elif isinstance(output, Mapping) and isinstance(output.get("content"), str):
+            text = output["content"]
         else:
             try:
                 text = json.dumps(output, ensure_ascii=False, default=str)

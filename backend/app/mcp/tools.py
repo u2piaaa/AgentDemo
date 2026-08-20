@@ -116,5 +116,9 @@ def normalize_mcp_tool_result(result: Any) -> Any:
             if isinstance(item, dict) and item.get("type") == "text" and item.get("text")
         ]
         if text_parts:
-            return {"content": "\n".join(str(part) for part in text_parts), "raw": result}
+            normalized = {"content": "\n".join(str(part) for part in text_parts)}
+            for key in ("isError", "url"):
+                if key in result:
+                    normalized[key] = result[key]
+            return normalized
     return result

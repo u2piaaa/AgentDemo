@@ -763,9 +763,11 @@ class AgentRuntime(AgentResponsePolicy):
             if result.tool_name == MCP_FETCH_TOOL_NAME:
                 url = ""
                 if isinstance(result.output, dict):
-                    raw = result.output.get("raw")
-                    if isinstance(raw, dict):
-                        url = str(raw.get("url") or "")
+                    url = str(result.output.get("url") or "")
+                    if not url:
+                        raw = result.output.get("raw")
+                        if isinstance(raw, dict):
+                            url = str(raw.get("url") or "")
                 return (
                     "Fetched web page content. Summarize the content from this page and preserve "
                     f"the source URL in the answer: {url}\n{output}"

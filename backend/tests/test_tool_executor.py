@@ -100,6 +100,16 @@ def test_tool_argument_validation_accepts_valid_payload() -> None:
     )
 
 
+def test_tool_summary_prefers_normalized_content() -> None:
+    executor = ToolExecutor()
+
+    summary = executor._summarize(
+        {"content": "Fetched page body", "isError": False, "url": "https://example.com"}
+    )
+
+    assert summary == "Fetched page body"
+
+
 def test_tool_argument_validation_rejects_missing_required() -> None:
     with pytest.raises(HTTPException) as exc_info:
         validate(

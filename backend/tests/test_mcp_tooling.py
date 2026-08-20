@@ -10,6 +10,7 @@ from app.mcp.registry import UnifiedToolRegistry
 from app.mcp.tools import (
     local_tool_to_mcp_schema,
     mcp_tool_to_registered_tool,
+    normalize_mcp_tool_result,
     safe_mcp_tool_description,
 )
 from app.models.task import Task
@@ -131,6 +132,22 @@ def test_mcp_description_falls_back_when_instruction_comes_first() -> None:
     )
 
     assert description == "MCP tool lookup from fake."
+
+
+def test_mcp_text_result_omits_duplicate_raw_payload() -> None:
+    normalized = normalize_mcp_tool_result(
+        {
+            "content": [{"type": "text", "text": "Fetched page body"}],
+            "isError": False,
+            "url": "https://example.com",
+        }
+    )
+
+    assert normalized == {
+        "content": "Fetched page body",
+        "isError": False,
+        "url": "https://example.com",
+    }
 
 
 @pytest.mark.asyncio
