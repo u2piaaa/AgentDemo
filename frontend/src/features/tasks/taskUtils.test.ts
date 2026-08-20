@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { Task } from "../../types";
-import { isTaskTerminal, taskEvents, taskProgress, taskResultAnswer } from "./taskUtils";
+import {
+  isTaskTerminal,
+  taskEvents,
+  taskProgress,
+  taskResultAnswer,
+  taskStatusLabel
+} from "./taskUtils";
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -34,6 +40,13 @@ describe("task helpers", () => {
     expect(taskProgress(-10)).toBe(0);
     expect(taskProgress(45)).toBe(45);
     expect(taskProgress(120)).toBe(100);
+  });
+
+  it("describes background task terminal states", () => {
+    expect(taskStatusLabel("succeeded")).toBe("Background task completed");
+    expect(taskStatusLabel("failed")).toBe("Background task failed");
+    expect(taskStatusLabel("cancelled")).toBe("Background task cancelled");
+    expect(taskStatusLabel("stale")).toBe("Background task interrupted");
   });
 
   it("filters malformed events and exposes a non-empty answer", () => {

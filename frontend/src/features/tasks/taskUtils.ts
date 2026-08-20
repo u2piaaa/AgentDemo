@@ -1,9 +1,19 @@
 import type { Task } from "../../types";
 
 const TERMINAL_TASK_STATUSES = new Set(["succeeded", "failed", "cancelled", "stale"]);
+const TASK_STATUS_LABELS: Record<string, string> = {
+  succeeded: "Background task completed",
+  failed: "Background task failed",
+  cancelled: "Background task cancelled",
+  stale: "Background task interrupted"
+};
 
 export function isTaskTerminal(status: string): boolean {
   return TERMINAL_TASK_STATUSES.has(status);
+}
+
+export function taskStatusLabel(status: string): string {
+  return TASK_STATUS_LABELS[status] ?? `Background task ${status}`;
 }
 
 export function taskEvents(task: Task): Record<string, unknown>[] {

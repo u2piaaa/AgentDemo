@@ -51,6 +51,7 @@ import {
   uploadDocument
 } from "./api";
 import { TaskList } from "./features/tasks/TaskList";
+import { isTaskTerminal, taskStatusLabel } from "./features/tasks/taskUtils";
 import {
   appendTraceStatus,
   compactSummary,
@@ -130,6 +131,7 @@ export function App() {
   const pendingConfirmationConversationRef = useRef<string | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const taskStatusRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
     getAuthStatus()
@@ -262,8 +264,22 @@ export function App() {
       try {
         const loadedTasks = await getTasks(activeConversationId);
         if (!isActive) return;
+        const completedTask = loadedTasks.find((task) => {
+          const previousStatus = taskStatusRef.current[task.id];
+          return (
+            previousStatus !== undefined &&
+            previousStatus !== task.status &&
+            isTaskTerminal(task.status)
+          );
+        });
+        taskStatusRef.current = Object.fromEntries(
+          loadedTasks.map((task) => [task.id, task.status])
+        );
         setTasks(loadedTasks);
         setTaskError("");
+        if (completedTask && !isStreaming) {
+          setStatus(taskStatusLabel(completedTask.status));
+        }
       } catch (error) {
         if (!isActive) return;
         setTaskError(error instanceof Error ? error.message : "Failed to load tasks");
@@ -280,7 +296,7 @@ export function App() {
       isActive = false;
       window.clearInterval(interval);
     };
-  }, [activeConversationId, currentUser]);
+  }, [activeConversationId, currentUser, isStreaming]);
 
   const activeConversation = useMemo(
     () => conversations.find((item) => item.id === activeConversationId),
@@ -428,7 +444,11 @@ export function App() {
     setTaskError("");
     try {
       const updated = await cancelTask(taskId);
+      taskStatusRef.current = { ...taskStatusRef.current, [updated.id]: updated.status };
       setTasks((current) => current.map((task) => (task.id === updated.id ? updated : task)));
+      if (!isStreaming) {
+        setStatus(taskStatusLabel(updated.status));
+      }
     } catch (error) {
       setTaskError(error instanceof Error ? error.message : "Failed to cancel task");
     } finally {
@@ -461,6 +481,7 @@ export function App() {
         setConfirmationDecisions({});
       }
       const task = await createAgentTask(text, conversationId);
+      taskStatusRef.current = { ...taskStatusRef.current, [task.id]: task.status };
       setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
       setInput("");
       setStatus("Background task queued");
