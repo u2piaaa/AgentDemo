@@ -1343,6 +1343,40 @@ async def test_current_time_word_without_fact_lookup_does_not_trigger_web_search
 
 
 @pytest.mark.asyncio
+async def test_current_conversation_context_does_not_trigger_web_search() -> None:
+    session = FakeSession()
+    runtime = AgentRuntime(
+        session=session,
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(
+        runtime,
+        "Project Blue Cedar 的验证码是什么？如果当前会话没有资料，请明确说不知道。",
+    )
+
+    assert "tool_call" not in [name for name, _ in events]
+    assert next(data for name, data in events if name == "plan")["no_tool"] is True
+
+
+@pytest.mark.asyncio
+async def test_external_current_price_query_still_triggers_web_search() -> None:
+    runtime = AgentRuntime(
+        session=FakeSession(),
+        plugin_registry=FakeRegistry(make_web_search_tool(successful_web_search)),  # type: ignore[arg-type]
+        model_gateway=FakeGateway(normalized_query="Bitcoin price"),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+
+    events = await collect_events(runtime, "What is the current price of Bitcoin?")
+
+    tool_call = next(data for name, data in events if name == "tool_call")
+    assert tool_call["tool_name"] == "web_search"
+
+
+@pytest.mark.asyncio
 async def test_web_search_call_is_persisted_in_assistant_metadata() -> None:
     session = FakeSession()
     runtime = AgentRuntime(

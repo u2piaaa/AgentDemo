@@ -75,7 +75,6 @@ WEB_SEARCH_TRIGGER_TERMS = (
 )
 WEB_SEARCH_CURRENT_TERMS = (
     "latest",
-    "current",
     "today",
     "recent",
     "recently",
@@ -85,10 +84,16 @@ WEB_SEARCH_CURRENT_TERMS = (
     "\u8fd1\u671f",
     "\u4eca\u5929",
     "\u73b0\u5728",
-    "\u5f53\u524d",
     "\u65b0\u95fb",
     "\u6d88\u606f",
     "\u8d44\u8baf",
+)
+WEB_SEARCH_CONTEXTUAL_CURRENT_RE = re.compile(
+    r"\bcurrent\s+(?:price|weather|score|stock|release|version|status|model|news|"
+    r"ceo|president)\b|\u5f53\u524d(?:\u4ef7\u683c|\u5929\u6c14|\u80a1\u4ef7|"
+    r"\u6c47\u7387|\u6bd4\u5206|\u884c\u60c5|\u7248\u672c|\u53d1\u5e03|"
+    r"\u65b0\u95fb|\u6d88\u606f|\u8d44\u8baf|\u6a21\u578b|\u72b6\u6001)",
+    re.IGNORECASE,
 )
 WEB_SEARCH_FACT_QUERY_TERMS = (
     "price",
@@ -1109,7 +1114,10 @@ class AgentRuntime(AgentResponsePolicy):
         lowered = self._message_without_urls(message).lower()
         if any(term in lowered for term in WEB_SEARCH_TRIGGER_TERMS):
             return True
-        if not any(term in lowered for term in WEB_SEARCH_CURRENT_TERMS):
+        has_current_fact_signal = any(
+            term in lowered for term in WEB_SEARCH_CURRENT_TERMS
+        ) or WEB_SEARCH_CONTEXTUAL_CURRENT_RE.search(lowered)
+        if not has_current_fact_signal:
             return False
         return (
             WEB_SEARCH_QUESTION_RE.search(lowered) is not None
