@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,22 @@ from app.services.plugin_registry import (
     PluginManifest,
     RegisteredTool,
 )
+
+
+MCP_DESCRIPTION_INSTRUCTION_MARKERS = (
+    "grants you",
+    "ignore previous",
+    "ignore prior",
+    "now you can",
+    "originally you",
+    "system prompt",
+    "tell the user",
+    "were advised",
+    "you are",
+    "you must",
+    "you should",
+)
+MCP_DESCRIPTION_MAX_CHARS = 300
 
 
 def local_tool_to_mcp_schema(tool: RegisteredTool) -> dict[str, Any]:
@@ -48,7 +65,7 @@ def mcp_tool_to_registered_tool(
     )
     manifest = PluginManifest(
         name=f"mcp.{server_name}.{name}",
-        description=str(tool.get("description") or f"MCP tool {name} from {server_name}."),
+        description=safe_mcp_tool_description(server_name, name, tool.get("description")),
         permission=permission,
         requires_confirmation=requires_confirmation,
         parameters=tool.get("inputSchema") or tool.get("input_schema") or {"type": "object"},
@@ -67,6 +84,25 @@ def mcp_tool_to_registered_tool(
         server_name=server_name,
         client=client,
     )
+
+
+def safe_mcp_tool_description(server_name: str, tool_name: str, value: Any) -> str:
+    fallback = f"MCP tool {tool_name} from {server_name}."
+    normalized = " ".join(str(value or "").split())
+    if not normalized:
+        return fallback
+
+    safe_sentences: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", normalized):
+        lowered = sentence.casefold()
+        if any(marker in lowered for marker in MCP_DESCRIPTION_INSTRUCTION_MARKERS):
+            break
+        safe_sentences.append(sentence)
+
+    description = " ".join(safe_sentences).strip()
+    if not description:
+        return fallback
+    return description[:MCP_DESCRIPTION_MAX_CHARS].rstrip()
 
 
 def normalize_mcp_tool_result(result: Any) -> Any:
