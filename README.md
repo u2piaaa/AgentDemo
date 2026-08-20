@@ -218,6 +218,12 @@ cd D:\workplace\AgentDemo\backend
 .\.venv\Scripts\uvicorn.exe app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+The backend exposes two unauthenticated operational probes:
+
+- `GET /api/health` is a lightweight process liveness check.
+- `GET /api/health/ready` verifies the database connection and returns HTTP 503
+  with an unavailable status when PostgreSQL cannot be reached.
+
 Install and start the frontend:
 
 ```powershell
@@ -225,6 +231,15 @@ cd D:\workplace\AgentDemo\frontend
 npm install
 npm run dev
 ```
+
+For an isolated worktree or a backend on a non-default port, set the Vite proxy
+target in an ignored `frontend/.env.local` file before starting the frontend:
+
+```text
+VITE_API_TARGET=http://127.0.0.1:8001
+```
+
+The default remains `http://localhost:8000` when `VITE_API_TARGET` is unset.
 
 Open `http://localhost:5173` on this machine, or
 `http://<this-machine-ip>:5173` from another device on the same network. The
