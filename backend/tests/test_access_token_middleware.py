@@ -23,6 +23,10 @@ def make_client(monkeypatch, agent_access_token: str = "secret") -> TestClient:
     async def health() -> dict[str, bool]:
         return {"ok": True}
 
+    @app.get("/api/health/ready")
+    async def readiness() -> dict[str, bool]:
+        return {"ok": True}
+
     @app.post("/api/auth/check")
     async def auth_check() -> dict[str, bool]:
         return {"ok": True}
@@ -38,6 +42,7 @@ def test_access_token_middleware_allows_auth_and_health_without_token(monkeypatc
     client = make_client(monkeypatch)
 
     assert client.get("/api/health").status_code == 200
+    assert client.get("/api/health/ready").status_code == 200
     assert client.post("/api/auth/check").status_code == 200
 
 
