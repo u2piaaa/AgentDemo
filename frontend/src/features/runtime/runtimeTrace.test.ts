@@ -2,12 +2,24 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendTraceStatus,
+  compactToolSummary,
   hasPendingConfirmation,
   mergeToolResult,
   traceFromMessage
 } from "./runtimeTrace";
 
 describe("runtime trace helpers", () => {
+  it("compacts legacy MCP summaries to their text content", () => {
+    const summary = compactToolSummary(
+      JSON.stringify({
+        content: "Fetched page body",
+        raw: { content: [{ type: "text", text: "Fetched page body" }], isError: false }
+      })
+    );
+
+    expect(summary).toBe("Fetched page body");
+  });
+
   it("deduplicates adjacent statuses and caps history", () => {
     expect(appendTraceStatus(["Planning"], "Planning")).toEqual(["Planning"]);
     expect(appendTraceStatus(["1", "2", "3", "4", "5", "6", "7", "8"], "9")).toEqual([

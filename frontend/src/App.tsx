@@ -55,6 +55,7 @@ import { isTaskTerminal, taskStatusLabel } from "./features/tasks/taskUtils";
 import {
   appendTraceStatus,
   compactSummary,
+  compactToolSummary,
   createExecutionTrace,
   extractLatestCitations,
   formatDuration,
@@ -832,7 +833,7 @@ export function App() {
           </div>
           {tool.reason ? <p>{tool.reason}</p> : null}
           <pre>{compactSummary(tool.arguments)}</pre>
-          {tool.output_summary ? <p>{tool.output_summary}</p> : null}
+          {tool.output_summary ? <p>{compactToolSummary(tool.output_summary)}</p> : null}
           {tool.error ? <p className="inline-error">{tool.error}</p> : null}
           {needsConfirmation ? (
             <div className="confirmation-box">
@@ -1290,7 +1291,7 @@ export function App() {
                       </div>
                       <span>{formatDuration(tool.duration_ms)}</span>
                       <pre>{compactSummary(tool.arguments)}</pre>
-                      {tool.output_summary ? <p>{tool.output_summary}</p> : null}
+                      {tool.output_summary ? <p>{compactToolSummary(tool.output_summary)}</p> : null}
                       {tool.error ? <p className="inline-error">{tool.error}</p> : null}
                     </div>
                   ))

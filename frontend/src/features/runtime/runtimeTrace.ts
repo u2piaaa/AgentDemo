@@ -88,6 +88,18 @@ export function compactSummary(value: unknown, maxLength = 180): string {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
+export function compactToolSummary(value: string, maxLength = 500): string {
+  try {
+    const parsed = JSON.parse(value);
+    if (isRecord(parsed) && typeof parsed.content === "string") {
+      return compactSummary(parsed.content, maxLength);
+    }
+  } catch {
+    // Older non-JSON summaries are already suitable for direct display.
+  }
+  return compactSummary(value, maxLength);
+}
+
 export function formatDuration(durationMs: number | undefined): string {
   if (typeof durationMs !== "number") return "n/a";
   if (durationMs < 1000) return `${durationMs} ms`;
