@@ -89,6 +89,10 @@ function providerLabel(provider: string | undefined): string {
   return provider === "mcp_server" ? "MCP" : "Local";
 }
 
+function countLabel(count: number, label: string): string {
+  return `${count} ${label}${count === 1 ? "" : "s"}`;
+}
+
 export function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -98,6 +102,7 @@ export function App() {
   const [mcpResources, setMcpResources] = useState<McpResource[]>([]);
   const [mcpPrompts, setMcpPrompts] = useState<McpPrompt[]>([]);
   const [mcpError, setMcpError] = useState("");
+  const [isLoadingMcp, setIsLoadingMcp] = useState(true);
   const [input, setInput] = useState("");
   const [status, setStatus] = useState("Idle");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -166,6 +171,7 @@ export function App() {
 
   useEffect(() => {
     if (!currentUser) {
+      setIsLoadingMcp(false);
       return;
     }
     getConversations().then((items) => {
@@ -173,6 +179,7 @@ export function App() {
       setActiveConversationId(items[0]?.id ?? null);
     });
     getTools().then(setTools);
+    setIsLoadingMcp(true);
     Promise.all([getMcpServers(), getMcpResources(), getMcpPrompts()])
       .then(([servers, resources, prompts]) => {
         setMcpServers(servers);
@@ -180,7 +187,8 @@ export function App() {
         setMcpPrompts(prompts);
         setMcpError("");
       })
-      .catch((error) => setMcpError(error instanceof Error ? error.message : "Failed to load MCP"));
+      .catch((error) => setMcpError(error instanceof Error ? error.message : "Failed to load MCP"))
+      .finally(() => setIsLoadingMcp(false));
   }, [currentUser]);
 
   useEffect(() => {
@@ -1195,24 +1203,35 @@ export function App() {
               </div>
               <div className="stack-list">
                 {mcpError ? <p className="inline-error">{mcpError}</p> : null}
-                {mcpServers.length === 0 ? (
+                {isLoadingMcp ? (
+                  <p className="muted">Loading MCP servers...</p>
+                ) : mcpServers.length === 0 ? (
                   <p className="muted">No MCP servers configured.</p>
                 ) : (
-                  mcpServers.map((server) => (
-                    <div className="mini-card" key={server.name}>
-                      <div className="history-card-title">
-                        <strong>{server.name}</strong>
-                        <span className={`status-pill ${server.status}`}>{server.status}</span>
+                  mcpServers.map((server) => {
+                    const availableToolCount = tools.filter(
+                      (tool) => tool.server_name === server.name
+                    ).length;
+                    const resourceCount = mcpResources.filter(
+                      (resource) => resource.server_name === server.name
+                    ).length;
+                    const promptCount = mcpPrompts.filter(
+                      (prompt) => prompt.server_name === server.name
+                    ).length;
+                    return (
+                      <div className="mini-card" key={server.name}>
+                        <div className="history-card-title">
+                          <strong>{server.name}</strong>
+                          <span className={`status-pill ${server.status}`}>{server.status}</span>
+                        </div>
+                        <span>{server.transport}</span>
+                        <p>
+                          {countLabel(availableToolCount, "available tool")} · {countLabel(resourceCount, "resource")} · {countLabel(promptCount, "prompt")}
+                        </p>
+                        {server.error ? <p className="inline-error">{server.error}</p> : null}
                       </div>
-                      <span>{server.transport}</span>
-                      <p>
-                        {server.registered_tool_count ?? server.tool_count} loaded tools / {server.tool_count} configured tools
-                        {" · "}
-                        {server.resource_count} resources · {server.prompt_count} prompts
-                      </p>
-                      {server.error ? <p className="inline-error">{server.error}</p> : null}
-                    </div>
-                  ))
+                    );
+                  })
                 )}
                 {mcpResources.slice(0, 4).map((resource) => (
                   <div className="mini-card" key={`${resource.server_name}-${resource.uri}`}>
