@@ -1,4 +1,6 @@
 .env
+.env.local
+.env.*.local
 mcp.servers.json
 .venv/
 __pycache__/
