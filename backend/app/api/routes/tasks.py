@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -12,6 +13,8 @@ from app.models.task import (
     TASK_KIND_MANUAL,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_QUEUED,
+    TASK_STATUS_RUNNING,
+    TERMINAL_TASK_STATUSES,
     Task,
     is_valid_task_status_transition,
 )
@@ -139,6 +142,7 @@ async def update_task(
         raise HTTPException(status_code=404, detail="Task not found")
     if payload.status is not None:
         validate_task_transition(task, payload.status)
+        apply_task_status_timestamps(task, payload.status)
         task.status = payload.status
     if payload.progress is not None:
         task.progress = payload.progress
@@ -166,6 +170,7 @@ async def cancel_task(
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     validate_task_transition(task, TASK_STATUS_CANCELLED)
+    apply_task_status_timestamps(task, TASK_STATUS_CANCELLED)
     task.status = TASK_STATUS_CANCELLED
     await session.commit()
     await session.refresh(task)
@@ -194,6 +199,14 @@ def validate_task_transition(task: Task, next_status: str) -> None:
         status_code=409,
         detail=f"Invalid task status transition from {task.status} to {next_status}",
     )
+
+
+def apply_task_status_timestamps(task: Task, next_status: str) -> None:
+    now = datetime.now(UTC)
+    if next_status == TASK_STATUS_RUNNING and task.started_at is None:
+        task.started_at = now
+    if next_status in TERMINAL_TASK_STATUSES and task.finished_at is None:
+        task.finished_at = now
 
 
 async def get_owned_task(session: AsyncSession, task_id: UUID, user_id: UUID) -> Task | None:

@@ -74,6 +74,8 @@ def make_task(user_id: UUID, conversation_id: UUID | None = None):
         trace_id=None,
         metadata_={},
         created_at=datetime.now(UTC),
+        started_at=None,
+        finished_at=None,
     )
 
 
@@ -330,6 +332,24 @@ def test_update_task_allows_owner() -> None:
     assert task.result == {"ok": True}
     assert task.error == "partial warning"
     assert task.trace_id == "trace-update"
+    assert task.started_at is not None
+    assert task.finished_at is None
+
+
+def test_update_task_sets_finished_at_for_terminal_status() -> None:
+    user = SimpleNamespace(id=uuid4())
+    task = make_task(user.id)
+    task.status = "running"
+    session = FakeSession(
+        results=[FakeResult(scalar=task)],
+        expected_filters=[("tasks.user_id", user.id)],
+    )
+    client = make_client(session, user)
+
+    response = client.patch(f"/api/tasks/{task.id}", json={"status": "succeeded"})
+
+    assert response.status_code == 200
+    assert task.finished_at is not None
 
 
 def test_update_task_rejects_invalid_status_transition() -> None:
@@ -363,6 +383,7 @@ def test_cancel_task_allows_owner() -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "cancelled"
     assert task.status == "cancelled"
+    assert task.finished_at is not None
     assert session.committed is True
     assert scheduler.cancelled == [task.id]
 
