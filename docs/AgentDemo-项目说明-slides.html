@@ -45,13 +45,17 @@
 
     html, body { width: 100%; min-height: 100%; }
 
-    html { background: var(--canvas); }
+    html {
+      background: var(--canvas);
+      scroll-behavior: smooth;
+      scroll-snap-type: y mandatory;
+    }
 
     body {
       margin: 0;
       min-width: 320px;
       min-height: 100dvh;
-      overflow: hidden;
+      overflow-x: hidden;
       color: var(--ink);
       background:
         radial-gradient(circle at 18% 12%, rgba(198, 95, 61, .10), transparent 30rem),
@@ -84,10 +88,10 @@
     .deck {
       position: relative;
       width: 100vw;
-      height: 100dvh;
+      min-height: 100dvh;
       max-width: 1920px;
       margin: 0 auto;
-      overflow: hidden;
+      overflow: visible;
       background: var(--paper);
       box-shadow: var(--shadow);
       isolation: isolate;
@@ -95,7 +99,7 @@
 
     .deck::before {
       content: "";
-      position: absolute;
+      position: fixed;
       inset: 0;
       z-index: 0;
       pointer-events: none;
@@ -106,22 +110,27 @@
       mask-image: linear-gradient(to bottom, rgba(0, 0, 0, .7), transparent 76%);
     }
 
-    .topbar, .bottombar {
+    .topbar {
       position: fixed;
       z-index: var(--z-chrome);
-      left: max(24px, calc((100vw - 1920px) / 2 + 24px));
-      right: max(24px, calc((100vw - 1920px) / 2 + 24px));
-      display: flex;
+      top: 0;
+      left: 50%;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
       align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      pointer-events: none;
+      gap: clamp(18px, 2.5vw, 40px);
+      width: min(100%, 1920px);
+      min-height: 72px;
+      padding:
+        max(10px, env(safe-area-inset-top))
+        clamp(18px, 3vw, 48px)
+        10px;
+      border-bottom: 1px solid rgba(199, 184, 167, .86);
+      background: rgba(247, 243, 235, .94);
+      box-shadow: 0 8px 24px rgba(54, 41, 32, .07);
+      backdrop-filter: blur(18px);
+      transform: translateX(-50%);
     }
-
-    .topbar { top: max(18px, env(safe-area-inset-top)); }
-    .bottombar { bottom: max(18px, env(safe-area-inset-bottom)); }
-
-    .brand, .palette-note, .counter, .key-hint, .nav-controls { pointer-events: auto; }
 
     .brand {
       display: inline-flex;
@@ -132,6 +141,7 @@
       font-weight: 750;
       letter-spacing: .08em;
       text-transform: uppercase;
+      white-space: nowrap;
     }
 
     .brand-mark {
@@ -143,7 +153,7 @@
       transform: translateY(-4px);
     }
 
-    .palette-note, .key-hint {
+    .brand-section {
       color: var(--ink-faint);
       font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
       font-size: 11px;
@@ -152,49 +162,67 @@
       text-transform: uppercase;
     }
 
-    .nav-cluster {
+    .toc {
+      min-width: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      overscroll-behavior-x: contain;
+      scrollbar-color: var(--line-strong) transparent;
+      scrollbar-width: thin;
+    }
+
+    .toc-list {
       display: flex;
       align-items: center;
-      gap: 12px;
-      pointer-events: auto;
+      gap: 8px;
+      width: max-content;
+      margin: 0;
+      padding: 0 2px 3px;
+      list-style: none;
     }
 
-    .counter {
-      min-width: 74px;
-      font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
-      font-size: 13px;
-      font-variant-numeric: tabular-nums;
-      text-align: center;
-      color: var(--ink-soft);
-    }
-
-    .nav-controls { display: flex; gap: 8px; }
-
-    .nav-button {
-      min-width: 48px;
-      min-height: 48px;
-      padding: 0 14px;
-      border: 1px solid var(--line-strong);
-      border-radius: 14px;
+    .toc-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 44px;
+      padding: 0 12px;
+      border: 1px solid transparent;
+      border-radius: 12px;
       color: var(--ink);
-      background: rgba(255, 253, 248, .82);
-      box-shadow: 0 5px 18px rgba(54, 41, 32, .08);
+      background: transparent;
+      font-size: 13px;
+      font-weight: 680;
+      line-height: 1;
+      text-decoration: none;
+      white-space: nowrap;
       cursor: pointer;
       touch-action: manipulation;
       transition: color 180ms ease, background-color 180ms ease, border-color 180ms ease;
     }
 
-    .nav-button:hover:not(:disabled) {
-      color: var(--paper-strong);
-      border-color: var(--ink);
-      background: var(--ink);
+    .toc-link:hover {
+      border-color: var(--line-strong);
+      background: rgba(255, 253, 248, .82);
     }
 
-    .nav-button:active:not(:disabled) { background: var(--accent-dark); }
+    .toc-link:active { background: var(--accent-soft); }
 
-    .nav-button:disabled {
-      cursor: not-allowed;
-      opacity: .42;
+    .toc-link.is-active,
+    .toc-link[aria-current="page"] {
+      color: var(--accent-dark);
+      border-color: #d79a84;
+      background: var(--accent-soft);
+    }
+
+    .toc-number {
+      color: var(--ink-faint);
+      font: 700 11px/1 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+    }
+
+    .toc-link.is-active .toc-number,
+    .toc-link[aria-current="page"] .toc-number {
+      color: var(--accent-dark);
     }
 
     :focus-visible {
@@ -202,45 +230,23 @@
       outline-offset: 3px;
     }
 
-    .progress-track {
-      position: fixed;
-      z-index: var(--z-chrome);
-      inset: auto 0 0;
-      height: 4px;
-      background: rgba(37, 33, 30, .09);
-    }
-
-    .progress-bar {
-      width: 100%;
-      height: 100%;
-      background: var(--accent);
-      transform: scaleX(0);
-      transform-origin: left center;
-      transition: transform var(--motion) var(--ease);
-    }
-
     .slide {
-      position: absolute;
-      inset: 0;
+      position: relative;
       z-index: var(--z-slide);
       display: grid;
       align-content: center;
+      width: 100%;
+      min-height: 100svh;
+      min-height: 100dvh;
       gap: clamp(22px, 3.2vh, 40px);
       padding:
-        clamp(86px, 10vh, 122px)
+        clamp(108px, 12vh, 140px)
         clamp(28px, 7.5vw, 144px)
-        clamp(92px, 11vh, 132px);
+        clamp(56px, 8vh, 96px);
       overflow-x: hidden;
-      overflow-y: auto;
-      overscroll-behavior: contain;
-      opacity: 0;
-      visibility: hidden;
-      pointer-events: none;
-      transform: translate3d(44px, 0, 0);
-      transition:
-        opacity calc(var(--motion) * .8) ease,
-        transform var(--motion) var(--ease),
-        visibility 0s linear var(--motion);
+      scroll-margin-top: 0;
+      scroll-snap-align: start;
+      scroll-snap-stop: always;
     }
 
     .slide::after {
@@ -255,16 +261,6 @@
       line-height: 1;
       transform: translateY(-50%);
       pointer-events: none;
-    }
-
-    .slide.is-before { transform: translate3d(-44px, 0, 0); }
-
-    .slide.is-active {
-      opacity: 1;
-      visibility: visible;
-      pointer-events: auto;
-      transform: translate3d(0, 0, 0);
-      transition-delay: 0s;
     }
 
     .slide > * { position: relative; z-index: 1; }
@@ -319,7 +315,7 @@
     }
 
     p, li {
-      font-size: clamp(15px, 1.22vw, 19px);
+      font-size: clamp(16px, 1.22vw, 19px);
       line-height: 1.65;
     }
 
@@ -797,10 +793,16 @@
     }
 
     @media (max-width: 820px) {
-      .palette-note, .key-hint { display: none; }
+      .topbar {
+        grid-template-columns: 1fr;
+        gap: 3px;
+        padding: max(7px, env(safe-area-inset-top)) 14px 7px;
+      }
+      .brand { min-height: 30px; }
+      .toc-link { min-height: 44px; }
       .slide {
         align-content: start;
-        padding: 88px 22px 100px;
+        padding: 118px 22px 72px;
       }
       .slide::after { opacity: .58; }
       .hero-grid, .split, .three-col, .boundary, .roadmap { grid-template-columns: 1fr; }
@@ -816,12 +818,12 @@
     }
 
     @media (max-width: 520px) {
-      .topbar, .bottombar { left: 14px; right: 14px; }
+      .topbar { padding-right: 10px; padding-left: 10px; }
       .brand { font-size: 11px; }
-      .bottombar { gap: 8px; }
-      .counter { min-width: 52px; font-size: 12px; }
-      .nav-button { min-width: 46px; padding: 0 12px; }
-      .slide { padding: 80px 16px 92px; gap: 22px; }
+      .brand-section { font-size: 10px; }
+      .toc-list { gap: 6px; }
+      .toc-link { padding: 0 10px; font-size: 12px; }
+      .slide { padding: 116px 16px 64px; gap: 22px; }
       h1 { font-size: clamp(44px, 16vw, 68px); }
       h2 { font-size: clamp(34px, 11vw, 50px); }
       .lede { font-size: 17px; }
@@ -836,7 +838,7 @@
     }
 
     @media (max-height: 700px) and (min-width: 821px) {
-      .slide { align-content: start; padding-top: 74px; padding-bottom: 82px; gap: 18px; }
+      .slide { align-content: start; padding-top: 92px; padding-bottom: 48px; gap: 18px; }
       h1 { font-size: clamp(48px, 7vw, 86px); }
       h2 { font-size: clamp(36px, 4.5vw, 60px); }
       .terminal { min-height: 270px; }
@@ -857,7 +859,7 @@
       @page { size: 16in 9in; margin: 0; }
       html, body { width: auto; height: auto; overflow: visible; background: #fff; }
       .deck { width: auto; height: auto; max-width: none; overflow: visible; box-shadow: none; }
-      .topbar, .bottombar, .progress-track, .skip-link { display: none !important; }
+      .topbar, .skip-link { display: none !important; }
       .slide {
         position: relative;
         inset: auto;
@@ -878,12 +880,30 @@
   <a class="skip-link" href="#slide-1">跳到演示内容</a>
 
   <main class="deck" id="deck" aria-label="AgentDemo 项目说明演示稿">
-    <header class="topbar" aria-label="演示稿信息">
-      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>AgentDemo / Project Brief</div>
-      <div class="palette-note">warm terminal palette · 2026.09</div>
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>AgentDemo <span class="brand-section">项目目录</span></div>
+      <nav class="toc" aria-label="幻灯片目录跳转">
+        <ol class="toc-list">
+          <li><a class="toc-link is-active" href="#slide-1" aria-current="page"><span class="toc-number">01</span>概览</a></li>
+          <li><a class="toc-link" href="#slide-2"><span class="toc-number">02</span>定位</a></li>
+          <li><a class="toc-link" href="#slide-3"><span class="toc-number">03</span>工作台</a></li>
+          <li><a class="toc-link" href="#slide-4"><span class="toc-number">04</span>架构</a></li>
+          <li><a class="toc-link" href="#slide-5"><span class="toc-number">05</span>运行时</a></li>
+          <li><a class="toc-link" href="#slide-6"><span class="toc-number">06</span>SSE</a></li>
+          <li><a class="toc-link" href="#slide-7"><span class="toc-number">07</span>工具</a></li>
+          <li><a class="toc-link" href="#slide-8"><span class="toc-number">08</span>记忆</a></li>
+          <li><a class="toc-link" href="#slide-9"><span class="toc-number">09</span>搜索</a></li>
+          <li><a class="toc-link" href="#slide-10"><span class="toc-number">10</span>任务</a></li>
+          <li><a class="toc-link" href="#slide-11"><span class="toc-number">11</span>代码</a></li>
+          <li><a class="toc-link" href="#slide-12"><span class="toc-number">12</span>运行</a></li>
+          <li><a class="toc-link" href="#slide-13"><span class="toc-number">13</span>发布</a></li>
+          <li><a class="toc-link" href="#slide-14"><span class="toc-number">14</span>路线</a></li>
+          <li><a class="toc-link" href="#slide-15"><span class="toc-number">15</span>总结</a></li>
+        </ol>
+      </nav>
     </header>
 
-    <section class="slide is-active" id="slide-1" data-number="01" data-title="封面" role="group" aria-roledescription="幻灯片" aria-label="第 1 页，共 15 页：封面" aria-hidden="false" tabindex="-1">
+    <section class="slide is-current" id="slide-1" data-number="01" data-title="封面" role="group" aria-roledescription="幻灯片" aria-label="第 1 页，共 15 页：封面" tabindex="-1">
       <div class="hero-grid">
         <div class="title-block">
           <div>
@@ -914,7 +934,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-2" data-number="02" data-title="项目定位" role="group" aria-roledescription="幻灯片" aria-label="第 2 页，共 15 页：项目定位" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-2" data-number="02" data-title="项目定位" role="group" aria-roledescription="幻灯片" aria-label="第 2 页，共 15 页：项目定位" tabindex="-1">
       <div>
         <p class="eyebrow">01 / Product north star</p>
         <h2>不只是聊天框</h2>
@@ -928,7 +948,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-3" data-number="03" data-title="用户工作台" role="group" aria-roledescription="幻灯片" aria-label="第 3 页，共 15 页：用户工作台" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-3" data-number="03" data-title="用户工作台" role="group" aria-roledescription="幻灯片" aria-label="第 3 页，共 15 页：用户工作台" tabindex="-1">
       <div>
         <p class="eyebrow">02 / User experience</p>
         <h2>一个对话入口，四类工作空间</h2>
@@ -942,7 +962,7 @@
       <p class="lede">前端不是“包装层”，而是智能体可解释性与安全交互的一部分。</p>
     </section>
 
-    <section class="slide" id="slide-4" data-number="04" data-title="系统架构" role="group" aria-roledescription="幻灯片" aria-label="第 4 页，共 15 页：系统架构" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-4" data-number="04" data-title="系统架构" role="group" aria-roledescription="幻灯片" aria-label="第 4 页，共 15 页：系统架构" tabindex="-1">
       <div>
         <p class="eyebrow">03 / Architecture</p>
         <h2>六层协同架构</h2>
@@ -957,7 +977,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-5" data-number="05" data-title="Agent 运行时" role="group" aria-roledescription="幻灯片" aria-label="第 5 页，共 15 页：Agent 运行时" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-5" data-number="05" data-title="Agent 运行时" role="group" aria-roledescription="幻灯片" aria-label="第 5 页，共 15 页：Agent 运行时" tabindex="-1">
       <div>
         <p class="eyebrow">04 / Runtime graph</p>
         <h2>一次请求如何完成</h2>
@@ -974,7 +994,7 @@
       <p class="lede">LangGraph 让每个阶段都可测试、可插拔，也为失败恢复与后续扩展保留位置。</p>
     </section>
 
-    <section class="slide" id="slide-6" data-number="06" data-title="流式事件契约" role="group" aria-roledescription="幻灯片" aria-label="第 6 页，共 15 页：流式事件契约" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-6" data-number="06" data-title="流式事件契约" role="group" aria-roledescription="幻灯片" aria-label="第 6 页，共 15 页：流式事件契约" tabindex="-1">
       <div>
         <p class="eyebrow">05 / Streaming contract</p>
         <h2>SSE 是前后端的共同语言</h2>
@@ -995,7 +1015,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-7" data-number="07" data-title="工具安全边界" role="group" aria-roledescription="幻灯片" aria-label="第 7 页，共 15 页：工具安全边界" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-7" data-number="07" data-title="工具安全边界" role="group" aria-roledescription="幻灯片" aria-label="第 7 页，共 15 页：工具安全边界" tabindex="-1">
       <div>
         <p class="eyebrow">06 / Tool safety</p>
         <h2>模型可以提议，执行必须受控</h2>
@@ -1026,7 +1046,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-8" data-number="08" data-title="RAG 与记忆" role="group" aria-roledescription="幻灯片" aria-label="第 8 页，共 15 页：RAG 与记忆" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-8" data-number="08" data-title="RAG 与记忆" role="group" aria-roledescription="幻灯片" aria-label="第 8 页，共 15 页：RAG 与记忆" tabindex="-1">
       <div>
         <p class="eyebrow">07 / Knowledge &amp; memory</p>
         <h2>让上下文既丰富，又不会无限膨胀</h2>
@@ -1055,7 +1075,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-9" data-number="09" data-title="搜索与 MCP" role="group" aria-roledescription="幻灯片" aria-label="第 9 页，共 15 页：搜索与 MCP" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-9" data-number="09" data-title="搜索与 MCP" role="group" aria-roledescription="幻灯片" aria-label="第 9 页，共 15 页：搜索与 MCP" tabindex="-1">
       <div>
         <p class="eyebrow">08 / Search routing</p>
         <h2>不同链接，走不同能力路线</h2>
@@ -1068,7 +1088,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-10" data-number="10" data-title="后台任务" role="group" aria-roledescription="幻灯片" aria-label="第 10 页，共 15 页：后台任务" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-10" data-number="10" data-title="后台任务" role="group" aria-roledescription="幻灯片" aria-label="第 10 页，共 15 页：后台任务" tabindex="-1">
       <div>
         <p class="eyebrow">09 / Background work</p>
         <h2>耗时工作，不必绑住聊天请求</h2>
@@ -1098,7 +1118,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-11" data-number="11" data-title="接口、数据与代码地图" role="group" aria-roledescription="幻灯片" aria-label="第 11 页，共 15 页：接口、数据与代码地图" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-11" data-number="11" data-title="接口、数据与代码地图" role="group" aria-roledescription="幻灯片" aria-label="第 11 页，共 15 页：接口、数据与代码地图" tabindex="-1">
       <div>
         <p class="eyebrow">10 / Developer map</p>
         <h2>从哪里开始读代码</h2>
@@ -1136,7 +1156,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-12" data-number="12" data-title="本地运行" role="group" aria-roledescription="幻灯片" aria-label="第 12 页，共 15 页：本地运行" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-12" data-number="12" data-title="本地运行" role="group" aria-roledescription="幻灯片" aria-label="第 12 页，共 15 页：本地运行" tabindex="-1">
       <div>
         <p class="eyebrow">11 / Local setup</p>
         <h2>三层依赖，两个服务入口</h2>
@@ -1162,7 +1182,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-13" data-number="13" data-title="质量与发布流程" role="group" aria-roledescription="幻灯片" aria-label="第 13 页，共 15 页：质量与发布流程" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-13" data-number="13" data-title="质量与发布流程" role="group" aria-roledescription="幻灯片" aria-label="第 13 页，共 15 页：质量与发布流程" tabindex="-1">
       <div>
         <p class="eyebrow">12 / Quality &amp; release</p>
         <h2>先在 test 证明，再进入 run</h2>
@@ -1178,7 +1198,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-14" data-number="14" data-title="风险与路线图" role="group" aria-roledescription="幻灯片" aria-label="第 14 页，共 15 页：风险与路线图" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-14" data-number="14" data-title="风险与路线图" role="group" aria-roledescription="幻灯片" aria-label="第 14 页，共 15 页：风险与路线图" tabindex="-1">
       <div>
         <p class="eyebrow">13 / Evolution</p>
         <h2>从可用原型，走向可靠个人基础设施</h2>
@@ -1202,7 +1222,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-15" data-number="15" data-title="总结" role="group" aria-roledescription="幻灯片" aria-label="第 15 页，共 15 页：总结" aria-hidden="true" tabindex="-1">
+    <section class="slide" id="slide-15" data-number="15" data-title="总结" role="group" aria-roledescription="幻灯片" aria-label="第 15 页，共 15 页：总结" tabindex="-1">
       <div class="hero-grid">
         <div class="title-block">
           <div>
@@ -1231,17 +1251,6 @@ persist useful context
       </div>
     </section>
 
-    <footer class="bottombar" aria-label="演示稿导航">
-      <div class="key-hint">Arrow keys / Space / Swipe</div>
-      <div class="nav-cluster">
-        <span class="counter" id="counter" aria-live="polite">01 / 15</span>
-        <div class="nav-controls">
-          <button class="nav-button" id="prevButton" type="button" aria-label="上一页">←</button>
-          <button class="nav-button" id="nextButton" type="button" aria-label="下一页">→</button>
-        </div>
-      </div>
-    </footer>
-    <div class="progress-track" aria-hidden="true"><div class="progress-bar" id="progressBar"></div></div>
     <p class="sr-only" id="slideAnnouncement" aria-live="polite"></p>
   </main>
 
@@ -1250,18 +1259,11 @@ persist useful context
       "use strict";
 
       var slides = Array.prototype.slice.call(document.querySelectorAll(".slide"));
-      var prevButton = document.getElementById("prevButton");
-      var nextButton = document.getElementById("nextButton");
-      var counter = document.getElementById("counter");
-      var progressBar = document.getElementById("progressBar");
+      var tocLinks = Array.prototype.slice.call(document.querySelectorAll(".toc-link"));
       var announcement = document.getElementById("slideAnnouncement");
+      var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
       var current = 0;
-      var touchStartX = 0;
-      var touchStartY = 0;
-
-      function pad(value) {
-        return String(value).padStart(2, "0");
-      }
+      var scrollFrame = 0;
 
       function indexFromHash() {
         var match = window.location.hash.match(/^#slide-(\d+)$/);
@@ -1269,75 +1271,118 @@ persist useful context
         return Math.min(Math.max(Number(match[1]) - 1, 0), slides.length - 1);
       }
 
-      function showSlide(index, updateHash) {
-        current = Math.min(Math.max(index, 0), slides.length - 1);
-
+      function updateCurrent(index, updateHash) {
+        var next = Math.min(Math.max(index, 0), slides.length - 1);
+        var changed = next !== current;
+        current = next;
         slides.forEach(function (slide, slideIndex) {
-          var active = slideIndex === current;
-          slide.classList.toggle("is-active", active);
-          slide.classList.toggle("is-before", slideIndex < current);
-          slide.setAttribute("aria-hidden", active ? "false" : "true");
-          if (active) slide.scrollTop = 0;
+          slide.classList.toggle("is-current", slideIndex === current);
         });
 
-        counter.textContent = pad(current + 1) + " / " + pad(slides.length);
-        progressBar.style.transform = "scaleX(" + ((current + 1) / slides.length) + ")";
-        prevButton.disabled = current === 0;
-        nextButton.disabled = current === slides.length - 1;
+        tocLinks.forEach(function (link, linkIndex) {
+          var active = linkIndex === current;
+          link.classList.toggle("is-active", active);
+          if (active) {
+            link.setAttribute("aria-current", "page");
+          } else {
+            link.removeAttribute("aria-current");
+          }
+        });
 
         var title = slides[current].getAttribute("data-title");
         document.title = "AgentDemo · " + title;
-        announcement.textContent = "第 " + (current + 1) + " 页，共 " + slides.length + " 页：" + title;
+        if (changed) {
+          announcement.textContent = "第 " + (current + 1) + " 页，共 " + slides.length + " 页：" + title;
+          tocLinks[current].scrollIntoView({
+            behavior: reduceMotion.matches ? "auto" : "smooth",
+            block: "nearest",
+            inline: "center"
+          });
+        }
 
         if (updateHash) {
           window.history.replaceState(null, "", "#slide-" + (current + 1));
         }
       }
 
+      function scrollToSlide(index, updateHash) {
+        var next = Math.min(Math.max(index, 0), slides.length - 1);
+        slides[next].scrollIntoView({
+          behavior: reduceMotion.matches ? "auto" : "smooth",
+          block: "start"
+        });
+        updateCurrent(next, updateHash);
+      }
+
+      function nearestSlideIndex() {
+        var viewportCenter = window.innerHeight / 2;
+        var bestIndex = 0;
+        var bestDistance = Infinity;
+
+        slides.forEach(function (slide, index) {
+          var rect = slide.getBoundingClientRect();
+          var slideCenter = rect.top + Math.min(rect.height, window.innerHeight) / 2;
+          var distance = Math.abs(slideCenter - viewportCenter);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestIndex = index;
+          }
+        });
+
+        return bestIndex;
+      }
+
+      function scheduleScrollUpdate() {
+        if (scrollFrame) return;
+        scrollFrame = window.requestAnimationFrame(function () {
+          scrollFrame = 0;
+          updateCurrent(nearestSlideIndex(), true);
+        });
+      }
+
       function isInteractive(target) {
         return Boolean(target.closest("button, a, input, textarea, select, summary"));
       }
 
-      prevButton.addEventListener("click", function () { showSlide(current - 1, true); });
-      nextButton.addEventListener("click", function () { showSlide(current + 1, true); });
+      tocLinks.forEach(function (link, index) {
+        link.addEventListener("click", function (event) {
+          event.preventDefault();
+          scrollToSlide(index, true);
+        });
+      });
 
       document.addEventListener("keydown", function (event) {
-        if (isInteractive(event.target) && event.key === " ") return;
+        if (isInteractive(event.target)) return;
 
-        if (["ArrowRight", "ArrowDown", "PageDown", " "].indexOf(event.key) !== -1) {
+        if (["ArrowDown", "PageDown", " "].indexOf(event.key) !== -1) {
           event.preventDefault();
-          showSlide(current + 1, true);
-        } else if (["ArrowLeft", "ArrowUp", "PageUp"].indexOf(event.key) !== -1) {
+          scrollToSlide(current + 1, true);
+        } else if (["ArrowUp", "PageUp"].indexOf(event.key) !== -1) {
           event.preventDefault();
-          showSlide(current - 1, true);
+          scrollToSlide(current - 1, true);
         } else if (event.key === "Home") {
           event.preventDefault();
-          showSlide(0, true);
+          scrollToSlide(0, true);
         } else if (event.key === "End") {
           event.preventDefault();
-          showSlide(slides.length - 1, true);
+          scrollToSlide(slides.length - 1, true);
         }
       });
 
-      document.addEventListener("touchstart", function (event) {
-        if (!event.touches.length) return;
-        touchStartX = event.touches[0].clientX;
-        touchStartY = event.touches[0].clientY;
-      }, { passive: true });
-
-      document.addEventListener("touchend", function (event) {
-        if (!event.changedTouches.length) return;
-        var deltaX = event.changedTouches[0].clientX - touchStartX;
-        var deltaY = event.changedTouches[0].clientY - touchStartY;
-        if (Math.abs(deltaX) < 56 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return;
-        showSlide(current + (deltaX < 0 ? 1 : -1), true);
-      }, { passive: true });
+      window.addEventListener("scroll", scheduleScrollUpdate, { passive: true });
+      window.addEventListener("resize", scheduleScrollUpdate);
 
       window.addEventListener("hashchange", function () {
-        showSlide(indexFromHash(), false);
+        scrollToSlide(indexFromHash(), false);
       });
 
-      showSlide(indexFromHash(), false);
+      var initial = indexFromHash();
+      updateCurrent(initial, false);
+      if (window.location.hash) {
+        window.requestAnimationFrame(function () {
+          slides[initial].scrollIntoView({ behavior: "auto", block: "start" });
+        });
+      }
     }());
   </script>
 </body>
