@@ -1,0 +1,1344 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="AgentDemo 项目说明：产品定位、系统架构、Agent 运行时、工具安全、RAG、MCP、开发与演进路线。">
+  <meta name="theme-color" content="#f2ede3">
+  <title>AgentDemo · 项目说明</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #e8e0d4;
+      --paper: #f7f3eb;
+      --paper-strong: #fffdf8;
+      --ink: #25211e;
+      --ink-soft: #5f5751;
+      --ink-faint: #6f655e;
+      --line: #d8cec0;
+      --line-strong: #c7b8a7;
+      --accent: #c65f3d;
+      --accent-dark: #8f3f29;
+      --accent-soft: #f2d7ca;
+      --moss: #536454;
+      --moss-soft: #dbe2d8;
+      --terminal: #272421;
+      --terminal-soft: #35312d;
+      --terminal-text: #f4eee4;
+      --terminal-muted: #bcb1a5;
+      --warning: #8a5a22;
+      --danger: #9c4438;
+      --shadow: 0 24px 70px rgba(55, 42, 33, 0.16);
+      --radius-sm: 12px;
+      --radius-md: 20px;
+      --radius-lg: 32px;
+      --ease: cubic-bezier(.22, 1, .36, 1);
+      --motion: 240ms;
+      --z-slide: 1;
+      --z-chrome: 20;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-synthesis: none;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { width: 100%; min-height: 100%; }
+
+    html { background: var(--canvas); }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100dvh;
+      overflow: hidden;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 18% 12%, rgba(198, 95, 61, .10), transparent 30rem),
+        var(--canvas);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    button, a { -webkit-tap-highlight-color: transparent; }
+
+    button { font: inherit; }
+
+    a { color: inherit; }
+
+    .skip-link {
+      position: fixed;
+      z-index: 100;
+      top: 12px;
+      left: 12px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      color: var(--paper-strong);
+      background: var(--ink);
+      transform: translateY(-160%);
+      transition: transform var(--motion) var(--ease);
+    }
+
+    .skip-link:focus { transform: translateY(0); }
+
+    .deck {
+      position: relative;
+      width: 100vw;
+      height: 100dvh;
+      max-width: 1920px;
+      margin: 0 auto;
+      overflow: hidden;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+      isolation: isolate;
+    }
+
+    .deck::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(89, 74, 63, .04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(89, 74, 63, .04) 1px, transparent 1px);
+      background-size: 40px 40px;
+      mask-image: linear-gradient(to bottom, rgba(0, 0, 0, .7), transparent 76%);
+    }
+
+    .topbar, .bottombar {
+      position: fixed;
+      z-index: var(--z-chrome);
+      left: max(24px, calc((100vw - 1920px) / 2 + 24px));
+      right: max(24px, calc((100vw - 1920px) / 2 + 24px));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      pointer-events: none;
+    }
+
+    .topbar { top: max(18px, env(safe-area-inset-top)); }
+    .bottombar { bottom: max(18px, env(safe-area-inset-bottom)); }
+
+    .brand, .palette-note, .counter, .key-hint, .nav-controls { pointer-events: auto; }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 44px;
+      font-size: 13px;
+      font-weight: 750;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .brand-mark {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      background: var(--accent);
+      box-shadow: 8px 8px 0 var(--accent-soft);
+      transform: translateY(-4px);
+    }
+
+    .palette-note, .key-hint {
+      color: var(--ink-faint);
+      font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.4;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .nav-cluster {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      pointer-events: auto;
+    }
+
+    .counter {
+      min-width: 74px;
+      font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+      text-align: center;
+      color: var(--ink-soft);
+    }
+
+    .nav-controls { display: flex; gap: 8px; }
+
+    .nav-button {
+      min-width: 48px;
+      min-height: 48px;
+      padding: 0 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      color: var(--ink);
+      background: rgba(255, 253, 248, .82);
+      box-shadow: 0 5px 18px rgba(54, 41, 32, .08);
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: color 180ms ease, background-color 180ms ease, border-color 180ms ease;
+    }
+
+    .nav-button:hover:not(:disabled) {
+      color: var(--paper-strong);
+      border-color: var(--ink);
+      background: var(--ink);
+    }
+
+    .nav-button:active:not(:disabled) { background: var(--accent-dark); }
+
+    .nav-button:disabled {
+      cursor: not-allowed;
+      opacity: .42;
+    }
+
+    :focus-visible {
+      outline: 3px solid var(--accent);
+      outline-offset: 3px;
+    }
+
+    .progress-track {
+      position: fixed;
+      z-index: var(--z-chrome);
+      inset: auto 0 0;
+      height: 4px;
+      background: rgba(37, 33, 30, .09);
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 100%;
+      background: var(--accent);
+      transform: scaleX(0);
+      transform-origin: left center;
+      transition: transform var(--motion) var(--ease);
+    }
+
+    .slide {
+      position: absolute;
+      inset: 0;
+      z-index: var(--z-slide);
+      display: grid;
+      align-content: center;
+      gap: clamp(22px, 3.2vh, 40px);
+      padding:
+        clamp(86px, 10vh, 122px)
+        clamp(28px, 7.5vw, 144px)
+        clamp(92px, 11vh, 132px);
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translate3d(44px, 0, 0);
+      transition:
+        opacity calc(var(--motion) * .8) ease,
+        transform var(--motion) var(--ease),
+        visibility 0s linear var(--motion);
+    }
+
+    .slide::after {
+      content: attr(data-number);
+      position: absolute;
+      top: 50%;
+      right: clamp(16px, 2.5vw, 42px);
+      color: rgba(198, 95, 61, .12);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(72px, 12vw, 180px);
+      font-weight: 700;
+      line-height: 1;
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+
+    .slide.is-before { transform: translate3d(-44px, 0, 0); }
+
+    .slide.is-active {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translate3d(0, 0, 0);
+      transition-delay: 0s;
+    }
+
+    .slide > * { position: relative; z-index: 1; }
+
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0 0 14px;
+      color: var(--accent-dark);
+      font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+      font-size: clamp(12px, 1vw, 14px);
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 30px;
+      height: 2px;
+      background: var(--accent);
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1, h2 {
+      max-width: 13ch;
+      margin-bottom: 0;
+      letter-spacing: -.045em;
+      text-wrap: balance;
+    }
+
+    h1 {
+      font-family: Georgia, "Songti SC", "STSong", serif;
+      font-size: clamp(52px, 8vw, 122px);
+      font-weight: 700;
+      line-height: .98;
+    }
+
+    h2 {
+      font-family: Georgia, "Songti SC", "STSong", serif;
+      font-size: clamp(38px, 5vw, 76px);
+      font-weight: 700;
+      line-height: 1.05;
+    }
+
+    h3 {
+      margin-bottom: 8px;
+      font-size: clamp(17px, 1.6vw, 23px);
+      line-height: 1.25;
+    }
+
+    p, li {
+      font-size: clamp(15px, 1.22vw, 19px);
+      line-height: 1.65;
+    }
+
+    .lede {
+      max-width: 44rem;
+      margin-bottom: 0;
+      color: var(--ink-soft);
+      font-size: clamp(18px, 1.7vw, 25px);
+      line-height: 1.55;
+    }
+
+    .accent { color: var(--accent-dark); }
+    .muted { color: var(--ink-soft); }
+    .mono { font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace; }
+
+    .hero-grid, .split, .three-col, .four-col {
+      display: grid;
+      align-items: stretch;
+      gap: clamp(16px, 2vw, 28px);
+    }
+
+    .hero-grid { grid-template-columns: minmax(0, 1.12fr) minmax(360px, .88fr); align-items: center; }
+    .split { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .three-col { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .four-col { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .title-block { display: grid; align-content: center; gap: clamp(18px, 2.5vh, 28px); }
+
+    .stamp-row { display: flex; flex-wrap: wrap; gap: 10px; }
+
+    .stamp, .event, .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      padding: 6px 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      color: var(--ink-soft);
+      background: rgba(255, 253, 248, .7);
+      font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: .03em;
+    }
+
+    .stamp.is-accent, .event.is-accent {
+      color: var(--accent-dark);
+      border-color: #d79a84;
+      background: var(--accent-soft);
+    }
+
+    .terminal {
+      position: relative;
+      min-height: 320px;
+      padding: 24px;
+      overflow: hidden;
+      border: 1px solid #171513;
+      border-radius: var(--radius-lg);
+      color: var(--terminal-text);
+      background: var(--terminal);
+      box-shadow: 0 28px 54px rgba(39, 36, 33, .22);
+    }
+
+    .terminal::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(135deg, rgba(255, 255, 255, .05), transparent 34%);
+    }
+
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 44px;
+      color: var(--terminal-muted);
+      font: 12px/1.4 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+      letter-spacing: .05em;
+    }
+
+    .terminal-dots { display: flex; gap: 7px; }
+    .terminal-dots span { width: 9px; height: 9px; border-radius: 50%; background: #665f58; }
+    .terminal-dots span:first-child { background: var(--accent); }
+
+    .terminal pre {
+      position: relative;
+      z-index: 1;
+      margin: 0;
+      overflow: hidden;
+      color: var(--terminal-text);
+      font: clamp(14px, 1.35vw, 20px)/1.75 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+      white-space: pre-wrap;
+    }
+
+    .prompt { color: #e9835f; }
+    .terminal-comment { color: var(--terminal-muted); }
+    .terminal-ok { color: #bdcfb7; }
+
+    .card {
+      position: relative;
+      min-width: 0;
+      padding: clamp(18px, 2vw, 28px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: rgba(255, 253, 248, .78);
+      box-shadow: 0 10px 26px rgba(54, 41, 32, .055);
+    }
+
+    .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+
+    .card-kicker {
+      display: block;
+      margin-bottom: 22px;
+      color: var(--accent-dark);
+      font: 700 12px/1.2 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    .card-number {
+      display: inline-grid;
+      width: 34px;
+      height: 34px;
+      margin-bottom: 18px;
+      place-items: center;
+      border-radius: 9px;
+      color: var(--paper-strong);
+      background: var(--accent);
+      font: 700 12px/1 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+    }
+
+    .statement {
+      max-width: 1100px;
+      margin: 0;
+      font-family: Georgia, "Songti SC", "STSong", serif;
+      font-size: clamp(28px, 4.25vw, 64px);
+      font-weight: 700;
+      line-height: 1.25;
+      letter-spacing: -.035em;
+      text-wrap: balance;
+    }
+
+    .stack {
+      display: grid;
+      gap: 10px;
+      max-width: 1160px;
+    }
+
+    .layer {
+      display: grid;
+      grid-template-columns: minmax(150px, .3fr) 1fr;
+      align-items: center;
+      gap: 18px;
+      min-height: 62px;
+      padding: 12px 18px;
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--line-strong);
+      border-radius: 12px;
+      background: rgba(255, 253, 248, .78);
+    }
+
+    .layer:nth-child(1), .layer:nth-child(4) { border-left-color: var(--accent); }
+    .layer:nth-child(3), .layer:nth-child(5) { border-left-color: var(--moss); }
+
+    .layer strong { font-size: clamp(15px, 1.3vw, 19px); }
+    .layer span { color: var(--ink-soft); font-size: clamp(13px, 1.05vw, 16px); line-height: 1.45; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(100px, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .flow-step {
+      position: relative;
+      min-height: 142px;
+      padding: 18px 14px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 253, 248, .82);
+    }
+
+    .flow-step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      z-index: 2;
+      top: 50%;
+      right: -16px;
+      width: 20px;
+      color: var(--accent-dark);
+      font-weight: 800;
+      text-align: center;
+      transform: translateY(-50%);
+    }
+
+    .flow-index {
+      display: block;
+      margin-bottom: 18px;
+      color: var(--accent-dark);
+      font: 700 12px/1 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+    }
+
+    .flow-step strong { display: block; margin-bottom: 8px; font-size: 15px; }
+    .flow-step small { color: var(--ink-soft); font-size: 12px; line-height: 1.45; }
+
+    .event-stream {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      padding: clamp(20px, 2.8vw, 36px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: rgba(255, 253, 248, .78);
+    }
+
+    .event-arrow { color: var(--line-strong); font-weight: 800; }
+
+    .boundary {
+      display: grid;
+      grid-template-columns: minmax(200px, .7fr) minmax(300px, 1fr) minmax(200px, .7fr);
+      align-items: center;
+      gap: clamp(16px, 2.4vw, 32px);
+    }
+
+    .boundary-side {
+      display: grid;
+      gap: 12px;
+    }
+
+    .boundary-box {
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 253, 248, .78);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .executor {
+      padding: clamp(26px, 3vw, 42px);
+      border-radius: var(--radius-lg);
+      color: var(--terminal-text);
+      background: var(--terminal);
+      box-shadow: 0 24px 46px rgba(39, 36, 33, .18);
+    }
+
+    .executor .card-kicker { color: #eb8d6c; }
+    .executor h3 { font-size: clamp(26px, 3vw, 42px); }
+    .executor p { color: var(--terminal-muted); }
+
+    .check-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin: 22px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .check-list li {
+      padding: 10px 12px;
+      border: 1px solid #4e4842;
+      border-radius: 10px;
+      color: var(--terminal-text);
+      font: 12px/1.35 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+    }
+
+    .memory-card { min-height: 330px; }
+    .memory-card.is-dark { color: var(--terminal-text); background: var(--terminal); border-color: var(--terminal); }
+    .memory-card.is-dark p, .memory-card.is-dark li { color: var(--terminal-muted); }
+
+    .bullet-list {
+      display: grid;
+      gap: 10px;
+      margin: 16px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .bullet-list li {
+      position: relative;
+      padding-left: 20px;
+      color: var(--ink-soft);
+    }
+
+    .bullet-list li::before {
+      content: "";
+      position: absolute;
+      top: .72em;
+      left: 0;
+      width: 7px;
+      height: 7px;
+      border-radius: 2px;
+      background: var(--accent);
+    }
+
+    .is-dark .bullet-list li::before { background: #e9835f; }
+
+    .route-card { min-height: 260px; }
+    .route-card code {
+      display: inline-block;
+      margin-top: 12px;
+      padding: 6px 9px;
+      border-radius: 8px;
+      color: var(--accent-dark);
+      background: var(--accent-soft);
+      font: 12px/1.4 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+    }
+
+    .state-flow {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .state {
+      padding: 12px 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      background: rgba(255, 253, 248, .84);
+      font: 700 12px/1.25 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+    }
+
+    .state.is-running { color: var(--accent-dark); border-color: #d79a84; background: var(--accent-soft); }
+    .state.is-done { color: #344739; border-color: #a8b7a5; background: var(--moss-soft); }
+    .state-arrow { color: var(--ink-faint); }
+    .state-note { margin-top: 20px; }
+
+    .code-map {
+      display: grid;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .code-line {
+      display: grid;
+      grid-template-columns: minmax(120px, .6fr) 1fr;
+      gap: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .code-line code { color: var(--accent-dark); font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace; }
+    .code-line span { color: var(--ink-soft); }
+
+    .command {
+      display: grid;
+      gap: 14px;
+      padding: clamp(20px, 2.2vw, 30px);
+      border-radius: var(--radius-md);
+      color: var(--terminal-text);
+      background: var(--terminal);
+    }
+
+    .command-line {
+      display: grid;
+      grid-template-columns: 95px 1fr;
+      gap: 14px;
+      align-items: start;
+      font: clamp(13px, 1.15vw, 16px)/1.55 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+    }
+
+    .command-label { color: #e9835f; }
+    .command code { color: var(--terminal-text); overflow-wrap: anywhere; }
+
+    .port-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .port { padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255, 253, 248, .78); }
+    .port strong { display: block; font: 700 19px/1.2 "SFMono-Regular", "Cascadia Code", Consolas, monospace; }
+    .port span { color: var(--ink-soft); font-size: 13px; }
+    .setup-side { display: grid; gap: 14px; align-content: start; }
+
+    .release-flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .release-step {
+      min-height: 150px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255, 253, 248, .8);
+    }
+
+    .release-step strong { display: block; margin: 10px 0 7px; }
+    .release-step p { margin-bottom: 0; color: var(--ink-soft); font-size: 14px; }
+
+    .branch {
+      display: inline-block;
+      padding: 5px 8px;
+      border-radius: 7px;
+      color: var(--accent-dark);
+      background: var(--accent-soft);
+      font: 700 12px/1 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+    }
+
+    .roadmap {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .roadmap-card { min-height: 300px; }
+    .roadmap-card:nth-child(2) { background: var(--accent-soft); border-color: #d79a84; }
+    .roadmap-card:nth-child(3) { background: var(--moss-soft); border-color: #a8b7a5; }
+
+    .closing-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      max-width: 1040px;
+    }
+
+    .closing-item {
+      display: grid;
+      grid-template-columns: 46px 1fr;
+      gap: 16px;
+      align-items: start;
+      padding: 20px;
+      border-top: 1px solid var(--line-strong);
+    }
+
+    .closing-item strong { display: block; margin-bottom: 6px; font-size: 18px; }
+    .closing-item p { margin-bottom: 0; color: var(--ink-soft); font-size: 14px; }
+
+    .closing-index {
+      color: var(--accent-dark);
+      font: 700 17px/1.2 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+    }
+
+    .doc-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+      width: fit-content;
+      margin-top: 6px;
+      padding: 10px 16px;
+      border: 1px solid var(--ink);
+      border-radius: 12px;
+      color: var(--paper-strong);
+      background: var(--ink);
+      font-weight: 700;
+      text-decoration: none;
+      transition: background-color 180ms ease, border-color 180ms ease;
+    }
+
+    .doc-link:hover { border-color: var(--accent-dark); background: var(--accent-dark); }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media (max-width: 1120px) {
+      .hero-grid { grid-template-columns: 1fr .82fr; }
+      .four-col { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow { grid-template-columns: repeat(4, minmax(120px, 1fr)); }
+      .flow-step:nth-child(4)::after { display: none; }
+      .boundary { grid-template-columns: 1fr 1.35fr; }
+      .boundary-side:last-child { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 820px) {
+      .palette-note, .key-hint { display: none; }
+      .slide {
+        align-content: start;
+        padding: 88px 22px 100px;
+      }
+      .slide::after { opacity: .58; }
+      .hero-grid, .split, .three-col, .boundary, .roadmap { grid-template-columns: 1fr; }
+      .hero-grid { align-items: start; }
+      .terminal { min-height: 270px; }
+      .four-col, .release-flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow-step:nth-child(even)::after { display: none; }
+      .flow-step:nth-child(4)::after { display: none; }
+      .boundary-side:last-child { grid-column: auto; grid-template-columns: 1fr; }
+      .memory-card, .route-card, .roadmap-card { min-height: 0; }
+      .port-row { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 520px) {
+      .topbar, .bottombar { left: 14px; right: 14px; }
+      .brand { font-size: 11px; }
+      .bottombar { gap: 8px; }
+      .counter { min-width: 52px; font-size: 12px; }
+      .nav-button { min-width: 46px; padding: 0 12px; }
+      .slide { padding: 80px 16px 92px; gap: 22px; }
+      h1 { font-size: clamp(44px, 16vw, 68px); }
+      h2 { font-size: clamp(34px, 11vw, 50px); }
+      .lede { font-size: 17px; }
+      .four-col, .flow, .release-flow, .closing-grid { grid-template-columns: 1fr; }
+      .flow-step:not(:last-child)::after { display: none; }
+      .layer { grid-template-columns: 1fr; gap: 5px; }
+      .terminal { padding: 18px; border-radius: 22px; }
+      .terminal-bar { margin-bottom: 28px; }
+      .event-arrow { display: none; }
+      .check-list { grid-template-columns: 1fr; }
+      .command-line { grid-template-columns: 1fr; gap: 4px; }
+    }
+
+    @media (max-height: 700px) and (min-width: 821px) {
+      .slide { align-content: start; padding-top: 74px; padding-bottom: 82px; gap: 18px; }
+      h1 { font-size: clamp(48px, 7vw, 86px); }
+      h2 { font-size: clamp(36px, 4.5vw, 60px); }
+      .terminal { min-height: 270px; }
+      .card { padding: 18px; }
+      .route-card, .memory-card, .roadmap-card { min-height: 0; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
+
+    @media print {
+      @page { size: 16in 9in; margin: 0; }
+      html, body { width: auto; height: auto; overflow: visible; background: #fff; }
+      .deck { width: auto; height: auto; max-width: none; overflow: visible; box-shadow: none; }
+      .topbar, .bottombar, .progress-track, .skip-link { display: none !important; }
+      .slide {
+        position: relative;
+        inset: auto;
+        min-height: 9in;
+        overflow: hidden;
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto;
+        transform: none !important;
+        break-after: page;
+        page-break-after: always;
+      }
+      .slide:last-of-type { break-after: auto; page-break-after: auto; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#slide-1">跳到演示内容</a>
+
+  <main class="deck" id="deck" aria-label="AgentDemo 项目说明演示稿">
+    <header class="topbar" aria-label="演示稿信息">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>AgentDemo / Project Brief</div>
+      <div class="palette-note">warm terminal palette · 2026.09</div>
+    </header>
+
+    <section class="slide is-active" id="slide-1" data-number="01" data-title="封面" role="group" aria-roledescription="幻灯片" aria-label="第 1 页，共 15 页：封面" aria-hidden="false" tabindex="-1">
+      <div class="hero-grid">
+        <div class="title-block">
+          <div>
+            <p class="eyebrow">Local-first personal AI agent</p>
+            <h1>Agent<span class="accent">Demo</span></h1>
+          </div>
+          <p class="lede">一个能对话、检索、规划、调用工具，并把过程沉淀为长期上下文的本地优先个人智能体。</p>
+          <div class="stamp-row" aria-label="项目关键词">
+            <span class="stamp is-accent">FastAPI</span>
+            <span class="stamp">React + Vite</span>
+            <span class="stamp">LangGraph</span>
+            <span class="stamp">PostgreSQL + pgvector</span>
+          </div>
+        </div>
+        <div class="terminal" aria-label="项目能力摘要">
+          <div class="terminal-bar">
+            <span>agentdemo / runtime</span>
+            <span class="terminal-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+          </div>
+          <pre><span class="prompt">&gt;</span> inspect project
+<span class="terminal-ok">✓</span> conversation persisted
+<span class="terminal-ok">✓</span> context retrieved
+<span class="terminal-ok">✓</span> plan streamed
+<span class="terminal-ok">✓</span> tool audited
+
+<span class="terminal-comment"># understand · act · remember</span></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-2" data-number="02" data-title="项目定位" role="group" aria-roledescription="幻灯片" aria-label="第 2 页，共 15 页：项目定位" aria-hidden="true" tabindex="-1">
+      <div>
+        <p class="eyebrow">01 / Product north star</p>
+        <h2>不只是聊天框</h2>
+      </div>
+      <p class="statement">把「提问—理解—行动—记忆」串成一个可观察、可控制、可持续演进的工作闭环。</p>
+      <div class="four-col">
+        <article class="card"><span class="card-number">01</span><h3>本地优先</h3><p class="muted">数据与运行环境尽可能留在本机，便于掌控隐私、成本与依赖。</p></article>
+        <article class="card"><span class="card-number">02</span><h3>过程透明</h3><p class="muted">状态、计划、工具调用和结果都通过流式事件呈现，而非只给最终答案。</p></article>
+        <article class="card"><span class="card-number">03</span><h3>安全行动</h3><p class="muted">外部能力统一经过验证、确认、超时、限流和审计边界。</p></article>
+        <article class="card"><span class="card-number">04</span><h3>长期上下文</h3><p class="muted">会话、RAG 与摘要记忆共同构成可延续的个人知识环境。</p></article>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-3" data-number="03" data-title="用户工作台" role="group" aria-roledescription="幻灯片" aria-label="第 3 页，共 15 页：用户工作台" aria-hidden="true" tabindex="-1">
+      <div>
+        <p class="eyebrow">02 / User experience</p>
+        <h2>一个对话入口，四类工作空间</h2>
+      </div>
+      <div class="four-col">
+        <article class="card"><span class="card-kicker">Conversation</span><h3>持续对话</h3><p>创建会话、回看历史、流式接收回答，并保持上下文连续。</p></article>
+        <article class="card"><span class="card-kicker">Runtime</span><h3>运行时观察</h3><p>查看当前阶段、计划步骤、工具调用、确认状态与执行结果。</p></article>
+        <article class="card"><span class="card-kicker">Knowledge</span><h3>知识与记忆</h3><p>导入文档、建立向量索引，并用摘要减少长对话的上下文压力。</p></article>
+        <article class="card"><span class="card-kicker">Tasks</span><h3>后台任务</h3><p>把耗时工作从聊天请求中拆出，支持状态查询、暂停和取消。</p></article>
+      </div>
+      <p class="lede">前端不是“包装层”，而是智能体可解释性与安全交互的一部分。</p>
+    </section>
+
+    <section class="slide" id="slide-4" data-number="04" data-title="系统架构" role="group" aria-roledescription="幻灯片" aria-label="第 4 页，共 15 页：系统架构" aria-hidden="true" tabindex="-1">
+      <div>
+        <p class="eyebrow">03 / Architecture</p>
+        <h2>六层协同架构</h2>
+      </div>
+      <div class="stack" aria-label="AgentDemo 六层架构">
+        <div class="layer"><strong>交互层</strong><span>React / Vite · 对话、确认卡片、Runtime Inspector、任务与知识库界面</span></div>
+        <div class="layer"><strong>API 层</strong><span>FastAPI · 认证、会话、流式聊天、工具确认、任务、知识库与记忆接口</span></div>
+        <div class="layer"><strong>Agent 运行时</strong><span>LangGraph · 上下文装配、检索、规划、工具决策、回答生成与持久化</span></div>
+        <div class="layer"><strong>能力层</strong><span>ToolExecutor · 内置工具、Web Search、Fetch MCP、GitHub / Hugging Face 路由</span></div>
+        <div class="layer"><strong>知识与记忆层</strong><span>RAG · 文档切分、Embedding、向量检索、记忆摘要与上下文压缩</span></div>
+        <div class="layer"><strong>数据层</strong><span>PostgreSQL + pgvector · 用户、会话、消息、工具审计、任务、知识文档</span></div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-5" data-number="05" data-title="Agent 运行时" role="group" aria-roledescription="幻灯片" aria-label="第 5 页，共 15 页：Agent 运行时" aria-hidden="true" tabindex="-1">
+      <div>
+        <p class="eyebrow">04 / Runtime graph</p>
+        <h2>一次请求如何完成</h2>
+      </div>
+      <div class="flow" aria-label="Agent 请求处理流程">
+        <div class="flow-step"><span class="flow-index">01</span><strong>确保会话</strong><small>校验用户、创建或恢复 conversation</small></div>
+        <div class="flow-step"><span class="flow-index">02</span><strong>装配上下文</strong><small>历史消息、系统约束、能力配置</small></div>
+        <div class="flow-step"><span class="flow-index">03</span><strong>检索知识</strong><small>按需召回知识片段与记忆摘要</small></div>
+        <div class="flow-step"><span class="flow-index">04</span><strong>规划动作</strong><small>识别意图，选择直接回答或工具路线</small></div>
+        <div class="flow-step"><span class="flow-index">05</span><strong>执行工具</strong><small>验证、确认、调用、记录与结果归一化</small></div>
+        <div class="flow-step"><span class="flow-index">06</span><strong>生成回答</strong><small>综合上下文与工具结果，流式输出</small></div>
+        <div class="flow-step"><span class="flow-index">07</span><strong>持久化</strong><small>保存消息、调用记录与后续摘要素材</small></div>
+      </div>
+      <p class="lede">LangGraph 让每个阶段都可测试、可插拔，也为失败恢复与后续扩展保留位置。</p>
+    </section>
+
+    <section class="slide" id="slide-6" data-number="06" data-title="流式事件契约" role="group" aria-roledescription="幻灯片" aria-label="第 6 页，共 15 页：流式事件契约" aria-hidden="true" tabindex="-1">
+      <div>
+        <p class="eyebrow">05 / Streaming contract</p>
+        <h2>SSE 是前后端的共同语言</h2>
+      </div>
+      <div class="event-stream" aria-label="SSE 事件序列">
+        <span class="event">status</span><span class="event-arrow">→</span>
+        <span class="event">plan</span><span class="event-arrow">→</span>
+        <span class="event is-accent">tool_call</span><span class="event-arrow">→</span>
+        <span class="event is-accent">tool_result</span><span class="event-arrow">→</span>
+        <span class="event">token</span><span class="event-arrow">→</span>
+        <span class="event">done</span>
+        <span class="event">error</span>
+      </div>
+      <div class="three-col">
+        <article class="card"><span class="card-kicker">Visible state</span><h3>用户知道正在发生什么</h3><p class="muted">检索、等待确认、工具执行和回答生成都有明确状态。</p></article>
+        <article class="card"><span class="card-kicker">Stable UI</span><h3>确认界面不会被流刷新冲掉</h3><p class="muted">前端围绕事件契约维护稳定的 pending tool 状态。</p></article>
+        <article class="card"><span class="card-kicker">Clean output</span><h3>协议文本不进入用户回答</h3><p class="muted">工具协议与用户可见 token 分离，避免原始调用标记泄漏。</p></article>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-7" data-number="07" data-title="工具安全边界" role="group" aria-roledescription="幻灯片" aria-label="第 7 页，共 15 页：工具安全边界" aria-hidden="true" tabindex="-1">
+      <div>
+        <p class="eyebrow">06 / Tool safety</p>
+        <h2>模型可以提议，执行必须受控</h2>
+      </div>
+      <div class="boundary">
+        <div class="boundary-side" aria-label="工具请求来源">
+          <div class="boundary-box"><strong>Agent 计划</strong><br><span class="muted">工具名 + 结构化参数</span></div>
+          <div class="boundary-box"><strong>用户确认</strong><br><span class="muted">高风险动作显式放行</span></div>
+        </div>
+        <article class="executor">
+          <span class="card-kicker">Safety &amp; audit boundary</span>
+          <h3>ToolExecutor</h3>
+          <p>所有本地工具、MCP 与搜索衍生抓取的统一入口。</p>
+          <ul class="check-list">
+            <li>schema validation</li>
+            <li>confirmation gate</li>
+            <li>timeout handling</li>
+            <li>output limiting</li>
+            <li>MCP policy</li>
+            <li>audit persistence</li>
+          </ul>
+        </article>
+        <div class="boundary-side" aria-label="外部工具目标">
+          <div class="boundary-box"><strong>Built-in tools</strong><br><span class="muted">计算、文件、业务能力</span></div>
+          <div class="boundary-box"><strong>MCP servers</strong><br><span class="muted">Fetch、GitHub、扩展服务</span></div>
+          <div class="boundary-box"><strong>Search providers</strong><br><span class="muted">检索与选中结果抓取</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-8" data-number="08" data-title="RAG 与记忆" role="group" aria-roledescription="幻灯片" aria-label="第 8 页，共 15 页：RAG 与记忆" aria-hidden="true" tabindex="-1">
+      <div>
+        <p class="eyebrow">07 / Knowledge &amp; memory</p>
+        <h2>让上下文既丰富，又不会无限膨胀</h2>
+      </div>
+      <div class="split">
+        <article class="card memory-card">
+          <span class="card-kicker">Knowledge / RAG</span>
+          <h3>把外部资料变成可检索证据</h3>
+          <ul class="bullet-list">
+            <li>文档导入与清洗</li>
+            <li>切分、Embedding 与 pgvector 入库</li>
+            <li>按当前问题召回相关片段</li>
+            <li>将证据注入本轮模型上下文</li>
+          </ul>
+        </article>
+        <article class="card memory-card is-dark">
+          <span class="card-kicker">Conversation / Memory</span>
+          <h3>把长对话压缩成可延续线索</h3>
+          <ul class="bullet-list">
+            <li>近期消息保留原文细节</li>
+            <li>较早历史提炼为摘要记忆</li>
+            <li>重要偏好与任务状态持续沉淀</li>
+            <li>在成本、速度与连续性之间平衡</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-9" data-number="09" data-title="搜索与 MCP" role="group" aria-roledescription="幻灯片" aria-label="第 9 页，共 15 页：搜索与 MCP" aria-hidden="true" tabindex="-1">
+      <div>
+        <p class="eyebrow">08 / Search routing</p>
+        <h2>不同链接，走不同能力路线</h2>
+      </div>
+      <div class="four-col">
+        <article class="card route-card"><span class="card-kicker">Direct URL</span><h3>通用网页</h3><p class="muted">交给 Fetch MCP 抓取与摘要，保留确认、超时和审计行为。</p><code>mcp.fetch.fetch</code></article>
+        <article class="card route-card"><span class="card-kicker">Repository-aware</span><h3>GitHub 链接</h3><p class="muted">优先使用仓库感知工具，理解目录、代码与提交语义。</p><code>github mcp</code></article>
+        <article class="card route-card"><span class="card-kicker">Model ecosystem</span><h3>Hugging Face</h3><p class="muted">按模型、数据集或论文对象路由，避免退化为普通网页抓取。</p><code>hf-aware tools</code></article>
+        <article class="card route-card"><span class="card-kicker">Freshness</span><h3>最新信息</h3><p class="muted">“今天、最新、新闻、来源”等意图触发 web_search，再选择结果抓取。</p><code>web_search → fetch</code></article>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-10" data-number="10" data-title="后台任务" role="group" aria-roledescription="幻灯片" aria-label="第 10 页，共 15 页：后台任务" aria-hidden="true" tabindex="-1">
+      <div>
+        <p class="eyebrow">09 / Background work</p>
+        <h2>耗时工作，不必绑住聊天请求</h2>
+      </div>
+      <div class="split">
+        <article class="card">
+          <span class="card-kicker">Lifecycle</span>
+          <h3>可观察的任务状态机</h3>
+          <div class="state-flow" aria-label="后台任务状态流转">
+            <span class="state">pending</span><span class="state-arrow">→</span>
+            <span class="state is-running">running</span><span class="state-arrow">→</span>
+            <span class="state is-done">completed</span>
+            <span class="state">failed</span><span class="state">cancelled</span>
+          </div>
+          <p class="muted state-note">任务记录进度、结果与错误，支持暂停、恢复或取消。</p>
+        </article>
+        <article class="card">
+          <span class="card-kicker">Why it matters</span>
+          <h3>把交互延迟与执行时长解耦</h3>
+          <ul class="bullet-list">
+            <li>聊天请求能快速返回状态</li>
+            <li>长任务可以独立重试与审计</li>
+            <li>后续可接入队列、调度与通知</li>
+            <li>为真正的异步 Agent 工作流打基础</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-11" data-number="11" data-title="接口、数据与代码地图" role="group" aria-roledescription="幻灯片" aria-label="第 11 页，共 15 页：接口、数据与代码地图" aria-hidden="true" tabindex="-1">
+      <div>
+        <p class="eyebrow">10 / Developer map</p>
+        <h2>从哪里开始读代码</h2>
+      </div>
+      <div class="three-col">
+        <article class="card">
+          <span class="card-kicker">Key API</span>
+          <h3>对话主路径</h3>
+          <div class="code-map">
+            <div class="code-line"><code>POST /chat/stream</code><span>创建一次流式 Agent 运行</span></div>
+            <div class="code-line"><code>POST /confirm/stream</code><span>确认后继续工具执行</span></div>
+            <div class="code-line"><code>/tasks</code><span>后台任务管理</span></div>
+          </div>
+        </article>
+        <article class="card">
+          <span class="card-kicker">Core data</span>
+          <h3>持久化对象</h3>
+          <div class="code-map">
+            <div class="code-line"><code>Conversation</code><span>会话容器与元数据</span></div>
+            <div class="code-line"><code>Message</code><span>用户与助手消息</span></div>
+            <div class="code-line"><code>ToolCall</code><span>参数、状态、结果与审计</span></div>
+            <div class="code-line"><code>Knowledge</code><span>文档、分块与向量</span></div>
+          </div>
+        </article>
+        <article class="card">
+          <span class="card-kicker">Read order</span>
+          <h3>推荐阅读顺序</h3>
+          <div class="code-map">
+            <div class="code-line"><code>frontend/</code><span>先理解用户可见状态</span></div>
+            <div class="code-line"><code>routes/</code><span>再定位 API 边界</span></div>
+            <div class="code-line"><code>agent runtime</code><span>理解图式编排</span></div>
+            <div class="code-line"><code>ToolExecutor</code><span>最后掌握安全边界</span></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-12" data-number="12" data-title="本地运行" role="group" aria-roledescription="幻灯片" aria-label="第 12 页，共 15 页：本地运行" aria-hidden="true" tabindex="-1">
+      <div>
+        <p class="eyebrow">11 / Local setup</p>
+        <h2>三层依赖，两个服务入口</h2>
+      </div>
+      <div class="split">
+        <div class="command" aria-label="本地启动步骤">
+          <div class="command-line"><span class="command-label">database</span><code>PostgreSQL + pgvector</code></div>
+          <div class="command-line"><span class="command-label">backend</span><code>install Python deps → migrate → start FastAPI</code></div>
+          <div class="command-line"><span class="command-label">frontend</span><code>npm install → npm run dev</code></div>
+          <div class="command-line"><span class="command-label">verify</span><code>register/login → chat → stream → tool confirm</code></div>
+        </div>
+        <div class="setup-side">
+          <div class="port-row" aria-label="本地服务端口">
+            <div class="port"><strong>8000</strong><span>FastAPI backend</span></div>
+            <div class="port"><strong>5173</strong><span>Vite frontend</span></div>
+            <div class="port"><strong>5432</strong><span>PostgreSQL</span></div>
+          </div>
+          <article class="card">
+            <span class="card-kicker">Configuration</span>
+            <p class="muted">模型与密钥、数据库连接、搜索提供方、MCP server、确认策略与超时限制都应通过本地配置注入，避免进入版本库。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-13" data-number="13" data-title="质量与发布流程" role="group" aria-roledescription="幻灯片" aria-label="第 13 页，共 15 页：质量与发布流程" aria-hidden="true" tabindex="-1">
+      <div>
+        <p class="eyebrow">12 / Quality &amp; release</p>
+        <h2>先在 test 证明，再进入 run</h2>
+      </div>
+      <div class="release-flow" aria-label="AgentDemo 发布流程">
+        <article class="release-step"><span class="branch">test</span><strong>实现变更</strong><p>在开发工作树完成代码与文档修改。</p></article>
+        <article class="release-step"><span class="branch">checks</span><strong>聚焦验证</strong><p>后端 pytest；前端 build / test；检查真实交互。</p></article>
+        <article class="release-step"><span class="branch">run</span><strong>合并稳定分支</strong><p>仅将通过验收的结果合并到运行基线。</p></article>
+        <article class="release-step"><span class="branch">origin</span><strong>推送双分支</strong><p>同步 test 与 run，并保持仓库私有。</p></article>
+      </div>
+      <div class="stamp-row" aria-label="重点测试范围">
+        <span class="stamp">agent_runtime</span><span class="stamp">tool_executor</span><span class="stamp">mcp_tooling</span><span class="stamp">mcp_security</span><span class="stamp">web_search_plugin</span><span class="stamp is-accent">real browser flow</span>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-14" data-number="14" data-title="风险与路线图" role="group" aria-roledescription="幻灯片" aria-label="第 14 页，共 15 页：风险与路线图" aria-hidden="true" tabindex="-1">
+      <div>
+        <p class="eyebrow">13 / Evolution</p>
+        <h2>从可用原型，走向可靠个人基础设施</h2>
+      </div>
+      <div class="roadmap">
+        <article class="card roadmap-card">
+          <span class="card-kicker">Now / 守住边界</span>
+          <h3>稳定性与安全</h3>
+          <ul class="bullet-list"><li>保护 SSE 契约</li><li>统一 MCP 错误语义</li><li>避免工具协议泄漏</li><li>确保确认态跨刷新稳定</li></ul>
+        </article>
+        <article class="card roadmap-card">
+          <span class="card-kicker">Near / 提升体验</span>
+          <h3>可观察与可恢复</h3>
+          <ul class="bullet-list"><li>更清晰的等待状态</li><li>工具失败后的恢复路径</li><li>后台任务进度与通知</li><li>移动端运行面板优化</li></ul>
+        </article>
+        <article class="card roadmap-card">
+          <span class="card-kicker">Later / 扩展能力</span>
+          <h3>长期智能与生态</h3>
+          <ul class="bullet-list"><li>更精细的记忆策略</li><li>多知识库与权限边界</li><li>更多 MCP 能力适配</li><li>评测、成本与质量闭环</li></ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-15" data-number="15" data-title="总结" role="group" aria-roledescription="幻灯片" aria-label="第 15 页，共 15 页：总结" aria-hidden="true" tabindex="-1">
+      <div class="hero-grid">
+        <div class="title-block">
+          <div>
+            <p class="eyebrow">14 / Takeaway</p>
+            <h2>理解项目，抓住四条主线</h2>
+          </div>
+          <div class="closing-grid">
+            <div class="closing-item"><span class="closing-index">01</span><div><strong>对话是入口</strong><p>所有能力围绕持续会话组织。</p></div></div>
+            <div class="closing-item"><span class="closing-index">02</span><div><strong>运行时是中枢</strong><p>LangGraph 编排理解、规划与行动。</p></div></div>
+            <div class="closing-item"><span class="closing-index">03</span><div><strong>执行必须受控</strong><p>ToolExecutor 统一安全与审计。</p></div></div>
+            <div class="closing-item"><span class="closing-index">04</span><div><strong>记忆带来复利</strong><p>RAG 与摘要让系统越用越贴合。</p></div></div>
+          </div>
+          <a class="doc-link" href="AgentDemo-项目说明.docx">打开完整项目说明文档 →</a>
+        </div>
+        <div class="terminal" aria-label="项目总结">
+          <div class="terminal-bar"><span>agentdemo / summary</span><span>ready</span></div>
+          <pre><span class="prompt">&gt;</span> next step
+
+<span class="terminal-comment"># build on a stable contract</span>
+observe the runtime
+guard every action
+persist useful context
+
+<span class="terminal-ok">✓ project understood</span></pre>
+        </div>
+      </div>
+    </section>
+
+    <footer class="bottombar" aria-label="演示稿导航">
+      <div class="key-hint">Arrow keys / Space / Swipe</div>
+      <div class="nav-cluster">
+        <span class="counter" id="counter" aria-live="polite">01 / 15</span>
+        <div class="nav-controls">
+          <button class="nav-button" id="prevButton" type="button" aria-label="上一页">←</button>
+          <button class="nav-button" id="nextButton" type="button" aria-label="下一页">→</button>
+        </div>
+      </div>
+    </footer>
+    <div class="progress-track" aria-hidden="true"><div class="progress-bar" id="progressBar"></div></div>
+    <p class="sr-only" id="slideAnnouncement" aria-live="polite"></p>
+  </main>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var slides = Array.prototype.slice.call(document.querySelectorAll(".slide"));
+      var prevButton = document.getElementById("prevButton");
+      var nextButton = document.getElementById("nextButton");
+      var counter = document.getElementById("counter");
+      var progressBar = document.getElementById("progressBar");
+      var announcement = document.getElementById("slideAnnouncement");
+      var current = 0;
+      var touchStartX = 0;
+      var touchStartY = 0;
+
+      function pad(value) {
+        return String(value).padStart(2, "0");
+      }
+
+      function indexFromHash() {
+        var match = window.location.hash.match(/^#slide-(\d+)$/);
+        if (!match) return 0;
+        return Math.min(Math.max(Number(match[1]) - 1, 0), slides.length - 1);
+      }
+
+      function showSlide(index, updateHash) {
+        current = Math.min(Math.max(index, 0), slides.length - 1);
+
+        slides.forEach(function (slide, slideIndex) {
+          var active = slideIndex === current;
+          slide.classList.toggle("is-active", active);
+          slide.classList.toggle("is-before", slideIndex < current);
+          slide.setAttribute("aria-hidden", active ? "false" : "true");
+          if (active) slide.scrollTop = 0;
+        });
+
+        counter.textContent = pad(current + 1) + " / " + pad(slides.length);
+        progressBar.style.transform = "scaleX(" + ((current + 1) / slides.length) + ")";
+        prevButton.disabled = current === 0;
+        nextButton.disabled = current === slides.length - 1;
+
+        var title = slides[current].getAttribute("data-title");
+        document.title = "AgentDemo · " + title;
+        announcement.textContent = "第 " + (current + 1) + " 页，共 " + slides.length + " 页：" + title;
+
+        if (updateHash) {
+          window.history.replaceState(null, "", "#slide-" + (current + 1));
+        }
+      }
+
+      function isInteractive(target) {
+        return Boolean(target.closest("button, a, input, textarea, select, summary"));
+      }
+
+      prevButton.addEventListener("click", function () { showSlide(current - 1, true); });
+      nextButton.addEventListener("click", function () { showSlide(current + 1, true); });
+
+      document.addEventListener("keydown", function (event) {
+        if (isInteractive(event.target) && event.key === " ") return;
+
+        if (["ArrowRight", "ArrowDown", "PageDown", " "].indexOf(event.key) !== -1) {
+          event.preventDefault();
+          showSlide(current + 1, true);
+        } else if (["ArrowLeft", "ArrowUp", "PageUp"].indexOf(event.key) !== -1) {
+          event.preventDefault();
+          showSlide(current - 1, true);
+        } else if (event.key === "Home") {
+          event.preventDefault();
+          showSlide(0, true);
+        } else if (event.key === "End") {
+          event.preventDefault();
+          showSlide(slides.length - 1, true);
+        }
+      });
+
+      document.addEventListener("touchstart", function (event) {
+        if (!event.touches.length) return;
+        touchStartX = event.touches[0].clientX;
+        touchStartY = event.touches[0].clientY;
+      }, { passive: true });
+
+      document.addEventListener("touchend", function (event) {
+        if (!event.changedTouches.length) return;
+        var deltaX = event.changedTouches[0].clientX - touchStartX;
+        var deltaY = event.changedTouches[0].clientY - touchStartY;
+        if (Math.abs(deltaX) < 56 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return;
+        showSlide(current + (deltaX < 0 ? 1 : -1), true);
+      }, { passive: true });
+
+      window.addEventListener("hashchange", function () {
+        showSlide(indexFromHash(), false);
+      });
+
+      showSlide(indexFromHash(), false);
+    }());
+  </script>
+</body>
+</html>
