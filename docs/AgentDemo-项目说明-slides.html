@@ -778,6 +778,113 @@
       margin: 0;
     }
 
+    .workflow-board {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: clamp(14px, 2vw, 28px);
+    }
+
+    .workflow-stage {
+      position: relative;
+      display: grid;
+      grid-template-rows: auto repeat(3, minmax(68px, 1fr));
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .workflow-stage:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      z-index: 2;
+      top: 50%;
+      right: clamp(-22px, -1.55vw, -11px);
+      width: 20px;
+      color: var(--accent-dark);
+      font-size: 20px;
+      font-weight: 800;
+      text-align: center;
+      transform: translateY(-50%);
+    }
+
+    .workflow-stage-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 36px;
+      padding: 0 4px 8px;
+      border-bottom: 2px solid var(--line-strong);
+    }
+
+    .workflow-stage-head span {
+      color: var(--accent-dark);
+      font: 700 11px/1 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+    }
+
+    .workflow-stage-head strong { font-size: 16px; }
+
+    .workflow-cell {
+      display: grid;
+      align-content: center;
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--line-strong);
+      border-radius: 12px;
+      background: rgba(255, 253, 248, .8);
+    }
+
+    .workflow-cell[data-role="user"] { border-left-color: var(--accent); }
+    .workflow-cell[data-role="agent"] { border-left-color: var(--ink); }
+    .workflow-cell[data-role="runtime"] { border-left-color: var(--moss); background: rgba(219, 226, 216, .45); }
+
+    .workflow-role {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--ink-faint);
+      font: 700 11px/1 "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .workflow-cell strong {
+      display: block;
+      font-size: clamp(13px, 1.05vw, 16px);
+      line-height: 1.35;
+    }
+
+    .workflow-cell span:last-child {
+      display: block;
+      margin-top: 4px;
+      color: var(--ink-soft);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .workflow-feedback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      width: min(780px, 100%);
+      min-height: 46px;
+      margin: 18px auto 0;
+      padding: 10px 18px;
+      color: var(--accent-dark);
+      border: 1px solid #d79a84;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.4;
+      text-align: center;
+    }
+
+    .workflow-feedback b {
+      font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+      font-size: 12px;
+    }
+
     .workspace-map {
       display: grid;
       grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.15fr) minmax(180px, 1fr);
@@ -1063,6 +1170,8 @@
       .flow-step:nth-child(4)::after { display: none; }
       .boundary { grid-template-columns: 1fr 1.35fr; }
       .boundary-side:last-child { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .workflow-board { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .workflow-stage:nth-child(3)::after { display: none; }
       .workspace-map { column-gap: 32px; }
       .routing-map { grid-template-columns: minmax(140px, .5fr) 30px minmax(160px, .6fr) 30px minmax(0, 1.5fr); }
     }
@@ -1105,12 +1214,33 @@
       .context-output { min-height: 150px; }
       .routing-map { grid-template-columns: 1fr; }
       .routing-targets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .workflow-board { grid-template-columns: 1fr; gap: 30px; }
+      .workflow-stage {
+        grid-template-columns: minmax(96px, .5fr) repeat(3, minmax(0, 1fr));
+        grid-template-rows: 1fr;
+      }
+      .workflow-stage-head {
+        display: grid;
+        align-content: center;
+        border-right: 2px solid var(--line-strong);
+        border-bottom: 0;
+        padding: 8px 12px 8px 0;
+      }
+      .workflow-stage:not(:last-child)::after,
+      .workflow-stage:nth-child(3)::after {
+        content: "↓";
+        display: block;
+        top: auto;
+        right: 50%;
+        bottom: -26px;
+        transform: translateX(50%);
+      }
     }
 
     @media (max-width: 520px) {
       .topbar { padding-right: 10px; padding-left: 10px; }
       .brand { font-size: 11px; }
-      .brand-section { font-size: 10px; }
+      .brand-section { font-size: 11px; }
       .toc-list { gap: 6px; }
       .toc-link { padding: 0 10px; font-size: 12px; }
       .slide { padding: 116px 16px 64px; gap: 22px; }
@@ -1155,6 +1285,17 @@
           "external";
       }
       .topology-arrow-one, .topology-arrow-two { transform: rotate(90deg); }
+      .workflow-stage {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto repeat(3, minmax(68px, auto));
+      }
+      .workflow-stage-head {
+        display: flex;
+        border-right: 0;
+        border-bottom: 2px solid var(--line-strong);
+        padding: 0 4px 8px;
+      }
+      .workflow-feedback { flex-direction: column; gap: 4px; border-radius: 18px; }
     }
 
     @media (max-height: 700px) and (min-width: 821px) {
@@ -1209,21 +1350,22 @@
           <li><a class="toc-link" href="#slide-3"><span class="toc-number">03</span>工作台</a></li>
           <li><a class="toc-link" href="#slide-4"><span class="toc-number">04</span>架构</a></li>
           <li><a class="toc-link" href="#slide-5"><span class="toc-number">05</span>运行时</a></li>
-          <li><a class="toc-link" href="#slide-6"><span class="toc-number">06</span>SSE</a></li>
-          <li><a class="toc-link" href="#slide-7"><span class="toc-number">07</span>工具</a></li>
-          <li><a class="toc-link" href="#slide-8"><span class="toc-number">08</span>记忆</a></li>
-          <li><a class="toc-link" href="#slide-9"><span class="toc-number">09</span>搜索</a></li>
-          <li><a class="toc-link" href="#slide-10"><span class="toc-number">10</span>任务</a></li>
-          <li><a class="toc-link" href="#slide-11"><span class="toc-number">11</span>代码</a></li>
-          <li><a class="toc-link" href="#slide-12"><span class="toc-number">12</span>运行</a></li>
-          <li><a class="toc-link" href="#slide-13"><span class="toc-number">13</span>发布</a></li>
-          <li><a class="toc-link" href="#slide-14"><span class="toc-number">14</span>路线</a></li>
-          <li><a class="toc-link" href="#slide-15"><span class="toc-number">15</span>总结</a></li>
+          <li><a class="toc-link" href="#slide-6"><span class="toc-number">06</span>工作流</a></li>
+          <li><a class="toc-link" href="#slide-7"><span class="toc-number">07</span>SSE</a></li>
+          <li><a class="toc-link" href="#slide-8"><span class="toc-number">08</span>工具</a></li>
+          <li><a class="toc-link" href="#slide-9"><span class="toc-number">09</span>记忆</a></li>
+          <li><a class="toc-link" href="#slide-10"><span class="toc-number">10</span>搜索</a></li>
+          <li><a class="toc-link" href="#slide-11"><span class="toc-number">11</span>任务</a></li>
+          <li><a class="toc-link" href="#slide-12"><span class="toc-number">12</span>代码</a></li>
+          <li><a class="toc-link" href="#slide-13"><span class="toc-number">13</span>运行</a></li>
+          <li><a class="toc-link" href="#slide-14"><span class="toc-number">14</span>发布</a></li>
+          <li><a class="toc-link" href="#slide-15"><span class="toc-number">15</span>路线</a></li>
+          <li><a class="toc-link" href="#slide-16"><span class="toc-number">16</span>总结</a></li>
         </ol>
       </nav>
     </header>
 
-    <section class="slide is-current" id="slide-1" data-number="01" data-title="封面" role="group" aria-roledescription="幻灯片" aria-label="第 1 页，共 15 页：封面" tabindex="-1">
+    <section class="slide is-current" id="slide-1" data-number="01" data-title="封面" role="group" aria-roledescription="幻灯片" aria-label="第 1 页，共 16 页：封面" tabindex="-1">
       <div class="hero-grid">
         <div class="title-block">
           <div>
@@ -1254,7 +1396,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-2" data-number="02" data-title="项目定位" role="group" aria-roledescription="幻灯片" aria-label="第 2 页，共 15 页：项目定位" tabindex="-1">
+    <section class="slide" id="slide-2" data-number="02" data-title="项目定位" role="group" aria-roledescription="幻灯片" aria-label="第 2 页，共 16 页：项目定位" tabindex="-1">
       <div>
         <p class="eyebrow">01 / Product north star</p>
         <h2>不只是聊天框</h2>
@@ -1268,7 +1410,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-3" data-number="03" data-title="用户工作台" role="group" aria-roledescription="幻灯片" aria-label="第 3 页，共 15 页：用户工作台" tabindex="-1">
+    <section class="slide" id="slide-3" data-number="03" data-title="用户工作台" role="group" aria-roledescription="幻灯片" aria-label="第 3 页，共 16 页：用户工作台" tabindex="-1">
       <div>
         <p class="eyebrow">02 / User experience</p>
         <h2>一个对话入口，四类工作空间</h2>
@@ -1284,7 +1426,7 @@
       <p class="lede">前端不是“包装层”，而是智能体可解释性与安全交互的一部分。</p>
     </section>
 
-    <section class="slide" id="slide-4" data-number="04" data-title="系统架构" role="group" aria-roledescription="幻灯片" aria-label="第 4 页，共 15 页：系统架构" tabindex="-1">
+    <section class="slide" id="slide-4" data-number="04" data-title="系统架构" role="group" aria-roledescription="幻灯片" aria-label="第 4 页，共 16 页：系统架构" tabindex="-1">
       <div>
         <p class="eyebrow">03 / Architecture</p>
         <h2>六层协同架构</h2>
@@ -1299,7 +1441,7 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-5" data-number="05" data-title="Agent 运行时" role="group" aria-roledescription="幻灯片" aria-label="第 5 页，共 15 页：Agent 运行时" tabindex="-1">
+    <section class="slide" id="slide-5" data-number="05" data-title="Agent 运行时" role="group" aria-roledescription="幻灯片" aria-label="第 5 页，共 16 页：Agent 运行时" tabindex="-1">
       <div>
         <p class="eyebrow">04 / Runtime graph</p>
         <h2>一次请求如何完成</h2>
@@ -1316,9 +1458,52 @@
       <p class="lede">LangGraph 让每个阶段都可测试、可插拔，也为失败恢复与后续扩展保留位置。</p>
     </section>
 
-    <section class="slide" id="slide-6" data-number="06" data-title="流式事件契约" role="group" aria-roledescription="幻灯片" aria-label="第 6 页，共 15 页：流式事件契约" tabindex="-1">
+    <section class="slide" id="slide-6" data-number="06" data-title="工作 Workflow" role="group" aria-roledescription="幻灯片" aria-label="第 6 页，共 16 页：工作 Workflow" tabindex="-1">
       <div>
-        <p class="eyebrow">05 / Streaming contract</p>
+        <p class="eyebrow">05 / Working workflow</p>
+        <h2>人、Agent 与运行时如何协同完成工作</h2>
+      </div>
+      <figure class="diagram" aria-labelledby="workflow-caption">
+        <figcaption class="sr-only" id="workflow-caption">工作流程分为输入、上下文、规划执行、验证和交付五个阶段。每个阶段展示用户、Agent 与运行时的职责；验证失败或信息不足时回到上下文与规划阶段。</figcaption>
+        <div class="workflow-board">
+          <div class="workflow-stage">
+            <div class="workflow-stage-head"><span>01</span><strong>输入</strong></div>
+            <div class="workflow-cell" data-role="user"><span class="workflow-role">User</span><strong>目标与约束</strong><span>任务、范围、完成标准</span></div>
+            <div class="workflow-cell" data-role="agent"><span class="workflow-role">Agent</span><strong>识别意图</strong><span>拆清需求、风险与边界</span></div>
+            <div class="workflow-cell" data-role="runtime"><span class="workflow-role">Runtime</span><strong>恢复会话</strong><span>权限、历史与能力配置</span></div>
+          </div>
+          <div class="workflow-stage">
+            <div class="workflow-stage-head"><span>02</span><strong>上下文</strong></div>
+            <div class="workflow-cell" data-role="user"><span class="workflow-role">User</span><strong>补充信息</strong><span>消除影响结果的关键歧义</span></div>
+            <div class="workflow-cell" data-role="agent"><span class="workflow-role">Agent</span><strong>装配上下文</strong><span>历史、知识与记忆</span></div>
+            <div class="workflow-cell" data-role="runtime"><span class="workflow-role">Runtime</span><strong>检索证据</strong><span>RAG、来源与相关片段</span></div>
+          </div>
+          <div class="workflow-stage">
+            <div class="workflow-stage-head"><span>03</span><strong>规划执行</strong></div>
+            <div class="workflow-cell" data-role="user"><span class="workflow-role">User</span><strong>确认动作</strong><span>高风险工具显式放行</span></div>
+            <div class="workflow-cell" data-role="agent"><span class="workflow-role">Agent</span><strong>选择路径</strong><span>直接回答或制定工具计划</span></div>
+            <div class="workflow-cell" data-role="runtime"><span class="workflow-role">Runtime</span><strong>受控执行</strong><span>ToolExecutor / MCP</span></div>
+          </div>
+          <div class="workflow-stage">
+            <div class="workflow-stage-head"><span>04</span><strong>验证</strong></div>
+            <div class="workflow-cell" data-role="user"><span class="workflow-role">User</span><strong>检查目标</strong><span>结果是否真正解决问题</span></div>
+            <div class="workflow-cell" data-role="agent"><span class="workflow-role">Agent</span><strong>验证与修正</strong><span>分析结果，必要时重新规划</span></div>
+            <div class="workflow-cell" data-role="runtime"><span class="workflow-role">Runtime</span><strong>测试与审计</strong><span>记录结果、错误与调用</span></div>
+          </div>
+          <div class="workflow-stage">
+            <div class="workflow-stage-head"><span>05</span><strong>交付记忆</strong></div>
+            <div class="workflow-cell" data-role="user"><span class="workflow-role">User</span><strong>获得结果</strong><span>答案、文件或任务状态</span></div>
+            <div class="workflow-cell" data-role="agent"><span class="workflow-role">Agent</span><strong>流式交付</strong><span>说明结论、证据与下一步</span></div>
+            <div class="workflow-cell" data-role="runtime"><span class="workflow-role">Runtime</span><strong>持久化</strong><span>消息、摘要与长期记忆</span></div>
+          </div>
+        </div>
+        <div class="workflow-feedback"><span>验证失败 / 信息不足</span><b>↺ 回到 02，更新上下文与计划</b></div>
+      </figure>
+    </section>
+
+    <section class="slide" id="slide-7" data-number="07" data-title="流式事件契约" role="group" aria-roledescription="幻灯片" aria-label="第 7 页，共 16 页：流式事件契约" tabindex="-1">
+      <div>
+        <p class="eyebrow">06 / Streaming contract</p>
         <h2>SSE 是前后端的共同语言</h2>
       </div>
       <div class="event-stream" aria-label="SSE 事件序列">
@@ -1337,9 +1522,9 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-7" data-number="07" data-title="工具安全边界" role="group" aria-roledescription="幻灯片" aria-label="第 7 页，共 15 页：工具安全边界" tabindex="-1">
+    <section class="slide" id="slide-8" data-number="08" data-title="工具安全边界" role="group" aria-roledescription="幻灯片" aria-label="第 8 页，共 16 页：工具安全边界" tabindex="-1">
       <div>
-        <p class="eyebrow">06 / Tool safety</p>
+        <p class="eyebrow">07 / Tool safety</p>
         <h2>模型可以提议，执行必须受控</h2>
       </div>
       <div class="boundary">
@@ -1368,9 +1553,9 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-8" data-number="08" data-title="RAG 与记忆" role="group" aria-roledescription="幻灯片" aria-label="第 8 页，共 15 页：RAG 与记忆" tabindex="-1">
+    <section class="slide" id="slide-9" data-number="09" data-title="RAG 与记忆" role="group" aria-roledescription="幻灯片" aria-label="第 9 页，共 16 页：RAG 与记忆" tabindex="-1">
       <div>
-        <p class="eyebrow">07 / Knowledge &amp; memory</p>
+        <p class="eyebrow">08 / Knowledge &amp; memory</p>
         <h2>让上下文既丰富，又不会无限膨胀</h2>
       </div>
       <figure class="diagram context-merge" aria-labelledby="context-caption">
@@ -1396,9 +1581,9 @@
       </figure>
     </section>
 
-    <section class="slide" id="slide-9" data-number="09" data-title="搜索与 MCP" role="group" aria-roledescription="幻灯片" aria-label="第 9 页，共 15 页：搜索与 MCP" tabindex="-1">
+    <section class="slide" id="slide-10" data-number="10" data-title="搜索与 MCP" role="group" aria-roledescription="幻灯片" aria-label="第 10 页，共 16 页：搜索与 MCP" tabindex="-1">
       <div>
-        <p class="eyebrow">08 / Search routing</p>
+        <p class="eyebrow">09 / Search routing</p>
         <h2>不同链接，走不同能力路线</h2>
       </div>
       <figure class="diagram routing-map" aria-labelledby="routing-caption">
@@ -1416,9 +1601,9 @@
       </figure>
     </section>
 
-    <section class="slide" id="slide-10" data-number="10" data-title="后台任务" role="group" aria-roledescription="幻灯片" aria-label="第 10 页，共 15 页：后台任务" tabindex="-1">
+    <section class="slide" id="slide-11" data-number="11" data-title="后台任务" role="group" aria-roledescription="幻灯片" aria-label="第 11 页，共 16 页：后台任务" tabindex="-1">
       <div>
-        <p class="eyebrow">09 / Background work</p>
+        <p class="eyebrow">10 / Background work</p>
         <h2>耗时工作，不必绑住聊天请求</h2>
       </div>
       <div class="split">
@@ -1446,9 +1631,9 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-11" data-number="11" data-title="接口、数据与代码地图" role="group" aria-roledescription="幻灯片" aria-label="第 11 页，共 15 页：接口、数据与代码地图" tabindex="-1">
+    <section class="slide" id="slide-12" data-number="12" data-title="接口、数据与代码地图" role="group" aria-roledescription="幻灯片" aria-label="第 12 页，共 16 页：接口、数据与代码地图" tabindex="-1">
       <div>
-        <p class="eyebrow">10 / Developer map</p>
+        <p class="eyebrow">11 / Developer map</p>
         <h2>从哪里开始读代码</h2>
       </div>
       <div class="three-col">
@@ -1484,9 +1669,9 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-12" data-number="12" data-title="本地运行" role="group" aria-roledescription="幻灯片" aria-label="第 12 页，共 15 页：本地运行" tabindex="-1">
+    <section class="slide" id="slide-13" data-number="13" data-title="本地运行" role="group" aria-roledescription="幻灯片" aria-label="第 13 页，共 16 页：本地运行" tabindex="-1">
       <div>
-        <p class="eyebrow">11 / Local setup</p>
+        <p class="eyebrow">12 / Local setup</p>
         <h2>三层依赖，两个服务入口</h2>
       </div>
       <div class="split">
@@ -1515,9 +1700,9 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-13" data-number="13" data-title="质量与发布流程" role="group" aria-roledescription="幻灯片" aria-label="第 13 页，共 15 页：质量与发布流程" tabindex="-1">
+    <section class="slide" id="slide-14" data-number="14" data-title="质量与发布流程" role="group" aria-roledescription="幻灯片" aria-label="第 14 页，共 16 页：质量与发布流程" tabindex="-1">
       <div>
-        <p class="eyebrow">12 / Quality &amp; release</p>
+        <p class="eyebrow">13 / Quality &amp; release</p>
         <h2>先在 test 证明，再进入 run</h2>
       </div>
       <div class="release-flow" aria-label="AgentDemo 发布流程">
@@ -1531,9 +1716,9 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-14" data-number="14" data-title="风险与路线图" role="group" aria-roledescription="幻灯片" aria-label="第 14 页，共 15 页：风险与路线图" tabindex="-1">
+    <section class="slide" id="slide-15" data-number="15" data-title="风险与路线图" role="group" aria-roledescription="幻灯片" aria-label="第 15 页，共 16 页：风险与路线图" tabindex="-1">
       <div>
-        <p class="eyebrow">13 / Evolution</p>
+        <p class="eyebrow">14 / Evolution</p>
         <h2>从可用原型，走向可靠个人基础设施</h2>
       </div>
       <div class="roadmap">
@@ -1555,11 +1740,11 @@
       </div>
     </section>
 
-    <section class="slide" id="slide-15" data-number="15" data-title="总结" role="group" aria-roledescription="幻灯片" aria-label="第 15 页，共 15 页：总结" tabindex="-1">
+    <section class="slide" id="slide-16" data-number="16" data-title="总结" role="group" aria-roledescription="幻灯片" aria-label="第 16 页，共 16 页：总结" tabindex="-1">
       <div class="hero-grid">
         <div class="title-block">
           <div>
-            <p class="eyebrow">14 / Takeaway</p>
+            <p class="eyebrow">15 / Takeaway</p>
             <h2>理解项目，抓住四条主线</h2>
           </div>
           <div class="closing-grid">
