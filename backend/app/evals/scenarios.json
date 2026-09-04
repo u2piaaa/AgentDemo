@@ -1,0 +1,216 @@
+{
+  "name": "agent-runtime-regression",
+  "minimum_score": 1.0,
+  "scenarios": [
+    {
+      "id": "search-current-ai-news-zh",
+      "kind": "plan",
+      "category": "tool_selection",
+      "message": "今天有什么 AI 新闻？请分条总结。",
+      "tools": [
+        {
+          "name": "web_search",
+          "permission": "network",
+          "parameters": {
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+              "query": {"type": "string"},
+              "recency_days": {"type": "integer"}
+            }
+          }
+        }
+      ],
+      "expected": {
+        "subset": {
+          "no_tool": false,
+          "tool_name": "web_search",
+          "arguments": {"query": "AI news today", "recency_days": 1}
+        }
+      }
+    },
+    {
+      "id": "search-current-version-en",
+      "kind": "plan",
+      "category": "tool_selection",
+      "message": "What is the current Python version?",
+      "tools": [{"name": "web_search", "permission": "network"}],
+      "expected": {
+        "subset": {"no_tool": false, "tool_name": "web_search"}
+      }
+    },
+    {
+      "id": "search-current-version-zh",
+      "kind": "plan",
+      "category": "tool_selection",
+      "message": "当前 Python 版本是多少？",
+      "tools": [{"name": "web_search", "permission": "network"}],
+      "expected": {
+        "subset": {"no_tool": false, "tool_name": "web_search"}
+      }
+    },
+    {
+      "id": "persona-current-does-not-search",
+      "kind": "plan",
+      "category": "tool_selection",
+      "message": "Write a short bio that sounds current and energetic.",
+      "tools": [{"name": "web_search", "permission": "network"}],
+      "expected": {"subset": {"no_tool": true, "tool_name": null}}
+    },
+    {
+      "id": "local-file-read",
+      "kind": "plan",
+      "category": "tool_selection",
+      "message": "请读取 README.md 并总结。",
+      "tools": [{"name": "read_file", "permission": "filesystem_read"}],
+      "expected": {
+        "subset": {
+          "no_tool": false,
+          "tool_name": "read_file",
+          "arguments": {"path": "README.md"}
+        }
+      }
+    },
+    {
+      "id": "direct-url-requires-confirmation",
+      "kind": "plan",
+      "category": "confirmation_policy",
+      "message": "Summarize https://example.com/guide",
+      "tools": [
+        {
+          "name": "mcp.fetch.fetch",
+          "provider": "mcp_server",
+          "provider_tool_id": "fetch",
+          "server_name": "fetch",
+          "permission": "network",
+          "requires_confirmation": true,
+          "parameters": {
+            "type": "object",
+            "required": ["url"],
+            "properties": {
+              "url": {"type": "string"},
+              "max_length": {"type": "integer"}
+            }
+          }
+        }
+      ],
+      "expected": {
+        "subset": {
+          "no_tool": false,
+          "tool_name": "mcp.fetch.fetch",
+          "requires_confirmation": true,
+          "arguments": {"url": "https://example.com/guide"}
+        }
+      }
+    },
+    {
+      "id": "github-prefers-repository-tool",
+      "kind": "plan",
+      "category": "tool_selection",
+      "message": "Summarize https://github.com/u2piaaa/AgentDemo/blob/run/README.md",
+      "tools": [
+        {
+          "name": "mcp.github.get_file_contents",
+          "provider": "mcp_server",
+          "provider_tool_id": "get_file_contents",
+          "server_name": "github",
+          "permission": "read",
+          "parameters": {
+            "type": "object",
+            "required": ["owner", "repo"],
+            "properties": {
+              "owner": {"type": "string"},
+              "repo": {"type": "string"},
+              "path": {"type": "string"},
+              "ref": {"type": "string"}
+            }
+          }
+        },
+        {
+          "name": "mcp.fetch.fetch",
+          "provider": "mcp_server",
+          "provider_tool_id": "fetch",
+          "server_name": "fetch",
+          "requires_confirmation": true
+        }
+      ],
+      "expected": {
+        "subset": {
+          "tool_name": "mcp.github.get_file_contents",
+          "server_name": "github",
+          "arguments": {
+            "owner": "u2piaaa",
+            "repo": "AgentDemo",
+            "path": "README.md",
+            "ref": "run"
+          }
+        }
+      }
+    },
+    {
+      "id": "strip-raw-tool-protocol",
+      "kind": "answer_safety",
+      "category": "answer_safety",
+      "message": "Summarize the project.",
+      "raw_answer": "AgentDemo is a local agent.\n<tool_calls><invoke name=\"read_file\"></invoke></tool_calls>",
+      "expected": {
+        "contains": ["AgentDemo is a local agent."],
+        "not_contains": ["tool_calls", "invoke name"]
+      }
+    },
+    {
+      "id": "protocol-only-uses-safe-fallback",
+      "kind": "answer_safety",
+      "category": "answer_safety",
+      "message": "用三句话介绍 AgentDemo 项目能做什么。",
+      "raw_answer": "<｜｜DSML｜｜tool_calls><invoke name=\"list_dir\"></invoke>",
+      "expected": {
+        "contains": ["AgentDemo", "安全的工具执行链路"],
+        "not_contains": ["dsml", "invoke name"]
+      }
+    },
+    {
+      "id": "knowledge-context-keeps-attribution",
+      "kind": "grounding_context",
+      "category": "citation_quality",
+      "message": "What does the architecture guide say?",
+      "citations": [
+        {
+          "title": "Architecture Guide",
+          "source_uri": "https://example.com/architecture",
+          "content": "The runtime uses a bounded tool loop.",
+          "score": 0.91,
+          "retrieval_method": "vector"
+        }
+      ],
+      "expected": {
+        "contains": [
+          "Knowledge source 1: Architecture Guide",
+          "Source: https://example.com/architecture",
+          "Retrieval: vector; relevance score: 0.91",
+          "The runtime uses a bounded tool loop."
+        ]
+      }
+    },
+    {
+      "id": "chinese-keyword-segmentation",
+      "kind": "keyword_terms",
+      "category": "grounding_retrieval",
+      "query": "请问项目代号是什么？",
+      "expected": {
+        "contains": ["项目", "代号"],
+        "not_contains": ["什么", "请问"]
+      }
+    },
+    {
+      "id": "english-keyword-punctuation",
+      "kind": "keyword_terms",
+      "category": "grounding_retrieval",
+      "query": "What is Aurora's database?",
+      "expected": {
+        "contains": ["aurora", "database"],
+        "not_contains": ["what"]
+      }
+    }
+  ]
+}

@@ -13,6 +13,7 @@ cd D:\workplace\AgentDemo\backend
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing --cov-fail-under=70
 .\.venv\Scripts\python.exe -m ruff check app tests
+.\.venv\Scripts\python.exe -m app.evals
 ```
 
 Useful targeted suites:
@@ -87,7 +88,30 @@ Use the existing patterns:
   not network behavior.
 
 `tests/test_agent_runtime_live.py::test_agent_runtime_streams_live_reply` is the
-opt-in live test. It skips automatically when `DEEPSEEK_API_KEY` is empty.
+opt-in live test. Pytest excludes the `live` marker by default, including on
+machines whose `.env` contains credentials. Run it explicitly when needed:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -m live
+```
+
+It still skips automatically when `DEEPSEEK_API_KEY` is empty.
+
+## Scenario-Based Agent Evaluations
+
+`python -m app.evals` runs deterministic scenarios without a database, network,
+or provider credentials. The checked-in suite covers:
+
+- current-information versus persona-style search intent;
+- local file, direct URL, and GitHub repository routing;
+- confirmation policy for network fetches;
+- removal of raw model tool-protocol markup;
+- citation title and source URL preservation in model context;
+- English and Chinese keyword extraction for embedding outages.
+
+The command returns a non-zero exit code when its aggregate score falls below
+the suite's `minimum_score`. The normal pytest suite executes the same gate, so
+the release check cannot accidentally omit it.
 
 ## No Real API Key Requirement
 
@@ -95,7 +119,7 @@ Default CI and local QA should pass with empty model API keys:
 
 - Runtime tests use fake gateways.
 - RAG fallback tests can force empty embeddings.
-- Live model tests must remain skipped unless keys are intentionally configured.
+- Live model tests must remain excluded unless they are intentionally selected.
 - Do not add mandatory tests that depend on OpenAI, DeepSeek, MoleAPI, or any
   other paid or account-bound service.
 
@@ -135,6 +159,7 @@ command names against `backend/pyproject.toml`, `backend/.env.example`, and
 ## Release Gate
 
 The commands in this document form the release gate: Ruff, the complete backend
-suite with at least 70% coverage, frontend unit tests, production build, and a
-high-severity dependency audit must all pass before merging `test` into `run`.
-Repository visibility is an external release check and should remain private.
+suite with at least 70% coverage, the 100% offline agent-evaluation gate,
+frontend unit tests, production build, and a high-severity dependency audit must
+all pass before merging `test` into `run`. Repository visibility is an external
+release check and should remain public.

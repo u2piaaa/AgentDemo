@@ -32,6 +32,7 @@ Run backend tests:
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing --cov-fail-under=70
 .\.venv\Scripts\python.exe -m ruff check app tests
+.\.venv\Scripts\python.exe -m app.evals
 ```
 
 Minimum targeted fallback if time is tight:
@@ -40,7 +41,9 @@ Minimum targeted fallback if time is tight:
 .\.venv\Scripts\python.exe -m pytest tests/test_access_token_middleware.py tests/test_tool_routes.py tests/test_task_routes.py tests/test_plugin_registry.py tests/test_tool_executor.py tests/test_agent_runtime.py tests/test_rag.py tests/test_memory_routes.py tests/test_mcp_security.py tests/test_mcp_tooling.py
 ```
 
-Expected: tests pass. Live model tests may skip when API keys are absent.
+Expected: tests pass and the offline agent evaluation score is 100%. Live model
+tests are excluded by default; run `python -m pytest -m live` only when an
+intentional paid provider check is needed.
 
 ## Frontend
 
@@ -109,7 +112,8 @@ With backend and frontend running:
 5. Ask to read or summarize `README.md` and verify `plan`, `tool_call`,
    `tool_result`, and final answer are shown.
 6. Upload a TXT or Markdown document and verify citations appear when asking
-   about its content.
+   about its content. Temporarily disable embeddings and verify a Chinese query
+   can still retrieve a matching Chinese document through keyword fallback.
 7. Launch a background agent task from the composer and verify queued/running
    progress, persisted events, result text, and task-bound tool audit data.
 8. Cancel a running background task and verify it becomes `cancelled` with a

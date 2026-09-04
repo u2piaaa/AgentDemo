@@ -161,7 +161,8 @@ class ModelGateway:
             "may be incomplete. If conversation history and knowledge context conflict about "
             "the user's current project, preferences, or instructions, prefer the conversation "
             "history. If neither conversation history nor knowledge context contains the answer, "
-            "say what is missing instead of guessing."
+            "say what is missing instead of guessing. When knowledge context includes a source "
+            "title or URL, preserve that attribution for factual claims in the answer."
         )
         user_content = prompt
         if context:

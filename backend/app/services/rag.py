@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import re
 from uuid import UUID
 
 from sqlalchemy import case, or_, select
@@ -10,6 +11,35 @@ from app.services.model_gateway import ModelGateway
 
 
 MIN_VECTOR_SCORE = 0.45
+MAX_KEYWORD_TERMS = 32
+LATIN_KEYWORD_STOP_TERMS = {
+    "about",
+    "could",
+    "from",
+    "have",
+    "please",
+    "tell",
+    "that",
+    "this",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+    "would",
+}
+CJK_KEYWORD_STOP_TERMS = {
+    "一下",
+    "什么",
+    "告诉",
+    "如何",
+    "帮我",
+    "怎么",
+    "是否",
+    "请问",
+}
+QUERY_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_.-]*|[\u3400-\u4dbf\u4e00-\u9fff]+", re.IGNORECASE)
+CJK_TOKEN_RE = re.compile(r"^[\u3400-\u4dbf\u4e00-\u9fff]+$")
 CONVERSATION_CONTEXT_TERMS = (
     "attachment",
     "context",
@@ -152,7 +182,7 @@ class RagService:
         limit: int,
         include_global: bool = True,
     ) -> list[Citation]:
-        keywords = [part.lower() for part in query.split() if len(part) > 2]
+        keywords = self._keyword_terms(query)
         if not keywords:
             return []
         statement = (
@@ -180,6 +210,41 @@ class RagService:
             )
             for _, score, chunk, document in scored[:limit]
         ]
+
+    def _keyword_terms(self, query: str) -> list[str]:
+        """Extract bounded Latin tokens and CJK n-grams for offline retrieval.
+
+        Whitespace tokenization works for English but turns a Chinese question into one
+        long token, so even a clearly related document often fails the substring match.
+        Character n-grams provide a deterministic fallback when embeddings are unavailable.
+        """
+
+        terms: list[str] = []
+        seen: set[str] = set()
+
+        def add(term: str) -> None:
+            normalized = term.casefold()
+            if normalized and normalized not in seen and len(terms) < MAX_KEYWORD_TERMS:
+                seen.add(normalized)
+                terms.append(normalized)
+
+        for token in QUERY_TOKEN_RE.findall(query.casefold()):
+            if CJK_TOKEN_RE.fullmatch(token):
+                for size in (3, 2):
+                    if len(token) < size:
+                        continue
+                    for start in range(len(token) - size + 1):
+                        term = token[start : start + size]
+                        if not any(stop_term in term for stop_term in CJK_KEYWORD_STOP_TERMS):
+                            add(term)
+                continue
+            normalized_token = token.strip("._-")
+            if (
+                len(normalized_token) >= 3
+                and normalized_token not in LATIN_KEYWORD_STOP_TERMS
+            ):
+                add(normalized_token)
+        return terms
 
     async def _conversation_document_context(
         self,

@@ -265,9 +265,10 @@ The runtime uses OpenAI-compatible HTTP APIs:
   `OPENAI_EMBEDDING_MODEL`
 - Agent chat: `LLM_BASE_URL`, `DEEPSEEK_API_KEY`, `LLM_CHAT_MODEL`
 
-Default development settings are in `backend/.env.example`. Most automated tests
-use fakes and do not need real API keys. The live runtime test is skipped unless
-`DEEPSEEK_API_KEY` is configured.
+Default development settings are in `backend/.env.example`. Automated tests and
+offline agent evaluations use fakes and do not need real API keys. Paid live
+checks are excluded by default even when a local `.env` contains credentials;
+run `python -m pytest -m live` explicitly when validating a configured provider.
 
 ## Plugin Authoring
 
@@ -308,7 +309,13 @@ cd D:\workplace\AgentDemo\backend
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m pytest --cov=app --cov-fail-under=70
 .\.venv\Scripts\python.exe -m ruff check app tests
+.\.venv\Scripts\python.exe -m app.evals
 ```
+
+The deterministic evaluation suite scores tool routing, confirmation policy,
+user-visible protocol safety, citation attribution, and multilingual retrieval.
+Its current release gate is 100%; scenarios live in
+`backend/app/evals/scenarios.json`.
 
 Frontend:
 

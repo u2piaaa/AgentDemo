@@ -10,7 +10,7 @@ from app.mcp.config import McpConfig, McpServerConfig
 from app.mcp.registry import UnifiedToolRegistry
 from app.models.conversation import Conversation, MemorySummary, Message
 from app.models.tool import ToolCall
-from app.schemas import AgentToolPlan, ChatRequest, ToolConfirmationRequest
+from app.schemas import AgentExecutionState, AgentToolPlan, ChatRequest, ToolConfirmationRequest
 from app.services.model_gateway import ModelRoute, StructuredToolPlan
 from app.services.plugin_registry import (
     TOOL_PROVIDER_MCP_SERVER,
@@ -518,6 +518,34 @@ async def test_plain_chat_uses_fake_gateway_without_tool() -> None:
     assert next(data for name, data in events if name == "plan")["no_tool"] is True
     assert assistant_messages(session)[0].content == "plain chat response "
     assert not any("Available runtime tools" in item for item in gateway.stream_calls[0]["context"])
+
+
+def test_answer_context_preserves_knowledge_source_attribution() -> None:
+    runtime = AgentRuntime(
+        session=FakeSession(),
+        plugin_registry=None,
+        model_gateway=FakeGateway(),  # type: ignore[arg-type]
+        rag_service=FakeRag(),  # type: ignore[arg-type]
+    )
+    state = AgentExecutionState(
+        message="What does the guide say?",
+        citations=[
+            {
+                "title": "Architecture Guide",
+                "source_uri": "https://example.com/architecture",
+                "content": "The runtime uses a bounded tool loop.",
+                "score": 0.91,
+                "retrieval_method": "vector",
+            }
+        ],
+    )
+
+    context = "\n".join(runtime._answer_context(state))
+
+    assert "Knowledge source 1: Architecture Guide" in context
+    assert "Source: https://example.com/architecture" in context
+    assert "Retrieval: vector; relevance score: 0.91" in context
+    assert "The runtime uses a bounded tool loop." in context
 
 
 @pytest.mark.asyncio

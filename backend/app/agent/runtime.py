@@ -89,8 +89,8 @@ WEB_SEARCH_CURRENT_TERMS = (
     "\u8d44\u8baf",
 )
 WEB_SEARCH_CONTEXTUAL_CURRENT_RE = re.compile(
-    r"\bcurrent\s+(?:price|weather|score|stock|release|version|status|model|news|"
-    r"ceo|president)\b|\u5f53\u524d(?:\u4ef7\u683c|\u5929\u6c14|\u80a1\u4ef7|"
+    r"\bcurrent(?:\s+[\w.#+-]+){0,4}\s+(?:price|weather|score|stock|release|"
+    r"version|status|model|news|ceo|president)\b|\u5f53\u524d.{0,24}?(?:\u4ef7\u683c|\u5929\u6c14|\u80a1\u4ef7|"
     r"\u6c47\u7387|\u6bd4\u5206|\u884c\u60c5|\u7248\u672c|\u53d1\u5e03|"
     r"\u65b0\u95fb|\u6d88\u606f|\u8d44\u8baf|\u6a21\u578b|\u72b6\u6001)",
     re.IGNORECASE,
@@ -286,7 +286,11 @@ class AgentRuntime(AgentResponsePolicy):
         tool_context = self._available_tools_context()
         if tool_context and self._requests_tool_inventory(state.message.lower()):
             context.append(tool_context)
-        context.extend(str(item["content"]) for item in state.citations if item.get("content"))
+        context.extend(
+            self._format_citation_context(item, index)
+            for index, item in enumerate(state.citations, start=1)
+            if item.get("content")
+        )
         context.extend(
             f"MCP resource {item.get('uri')} from {item.get('server_name')}:\n{item.get('text')}"
             for item in state.mcp_resources
@@ -299,6 +303,21 @@ class AgentRuntime(AgentResponsePolicy):
         )
         context.extend(f"Tool observation:\n{observation}" for observation in state.observations)
         return context
+
+    def _format_citation_context(self, citation: dict, index: int) -> str:
+        title = str(citation.get("title") or "Untitled knowledge source").strip()
+        source_uri = str(citation.get("source_uri") or "").strip()
+        retrieval_method = str(citation.get("retrieval_method") or "unknown").strip()
+        score = citation.get("score")
+        lines = [f"Knowledge source {index}: {title}"]
+        if source_uri:
+            lines.append(f"Source: {source_uri}")
+        if score is not None:
+            lines.append(f"Retrieval: {retrieval_method}; relevance score: {score}")
+        else:
+            lines.append(f"Retrieval: {retrieval_method}")
+        lines.append(f"Content:\n{citation['content']}")
+        return "\n".join(lines)
 
     def _available_tools_context(self) -> str:
         tools = self._available_tools()

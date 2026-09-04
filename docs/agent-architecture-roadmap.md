@@ -13,10 +13,10 @@ boundaries stable.
 | Human oversight | Confirmation gating and confirmed continuation streams for sensitive interactive calls. |
 | Safety and audit | Central `ToolExecutor` policy, timeouts, output limits, MCP policy, trace ids, and durable `ToolCall` rows. |
 | Background autonomy | Durable agent-task records, progress/events, startup recovery, cancellation, results, and task-bound tool audit. |
-| Grounding | pgvector-backed RAG with keyword fallback, citations, MCP resource import, and scoped documents. |
+| Grounding | pgvector-backed RAG with multilingual keyword fallback, source-attributed citations, MCP resource import, and scoped documents. |
 | Memory | Recent conversation history plus generated long-term summaries. |
 | Observability | Stable SSE events, persisted trace/model metadata, runtime inspector, task event history, and release coverage gates. |
-| Quality controls | Backend lint/coverage, frontend unit tests/build/audit, migration checks, and real API/browser smoke tests. |
+| Quality controls | Scenario-scored agent evaluations, backend lint/coverage, frontend unit tests/build/audit, migration checks, and real API/browser smoke tests. |
 
 ## Execution Boundaries
 
@@ -36,8 +36,8 @@ the runtime internals continue to evolve.
    a node instead of restarting at task granularity.
 2. Move background dispatch to a queue with leases, heartbeats, retry policy,
    idempotency keys, and concurrency limits for multi-process deployments.
-3. Add scenario-based agent evaluations for answer grounding, tool selection,
-   confirmation policy, citation quality, and regression scoring.
+3. Expand scenario-based evaluations with curated live answer-grounding and
+   citation-quality datasets while keeping the default gate deterministic.
 4. Add optional evaluator/reflection nodes only where measurements show a net
    quality gain; keep latency and tool-round budgets explicit.
 5. Add scheduled and recurring agent tasks with timezone-aware triggers,

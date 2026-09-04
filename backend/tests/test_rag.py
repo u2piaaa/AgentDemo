@@ -143,6 +143,52 @@ async def test_keyword_fallback_keeps_score_when_embedding_unavailable() -> None
 
 
 @pytest.mark.asyncio
+async def test_keyword_fallback_matches_chinese_when_embedding_unavailable() -> None:
+    conversation_id = uuid4()
+    document = KnowledgeDocument(
+        id=uuid4(),
+        conversation_id=conversation_id,
+        title="项目笔记",
+        source_type="text",
+        source_uri=None,
+        status="indexed",
+        created_at=datetime.now(UTC),
+    )
+    chunk = KnowledgeChunk(
+        id=uuid4(),
+        document_id=document.id,
+        chunk_index=0,
+        content="项目代号叫 Aurora，首选数据库是 PostgreSQL。",
+    )
+    service = RagService(session=FakeSession([(chunk, document)]))  # type: ignore[arg-type]
+
+    async def no_embeddings(texts: list[str]) -> list[list[float]]:
+        return []
+
+    service._embed_or_empty = no_embeddings  # type: ignore[method-assign]
+
+    citations = await service.search("项目代号是什么？", conversation_id=conversation_id)
+
+    assert len(citations) == 1
+    assert citations[0].title == "项目笔记"
+    assert citations[0].retrieval_method == "keyword"
+    assert citations[0].score >= 2.0
+
+
+def test_keyword_terms_are_bounded_and_ignore_common_question_noise() -> None:
+    service = RagService(session=None)  # type: ignore[arg-type]
+
+    terms = service._keyword_terms("请问项目代号是什么？ Please tell me about Aurora.")
+
+    assert "项目" in terms
+    assert "代号" in terms
+    assert "aurora" in terms
+    assert "什么" not in terms
+    assert "please" not in terms
+    assert len(terms) <= 32
+
+
+@pytest.mark.asyncio
 async def test_conversation_documents_are_prioritized_over_global_keyword_results() -> None:
     conversation_id = uuid4()
     local_document = KnowledgeDocument(

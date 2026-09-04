@@ -36,8 +36,15 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["app*"]
 
+[tool.setuptools.package-data]
+"app.evals" = ["scenarios.json"]
+
 [tool.pytest.ini_options]
+addopts = "-m 'not live'"
 asyncio_mode = "auto"
+markers = [
+    "live: calls paid or account-bound external services (opt in with -m live)",
+]
 testpaths = ["tests"]
 
 [tool.ruff]

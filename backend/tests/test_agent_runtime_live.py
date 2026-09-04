@@ -41,6 +41,7 @@ class FakeSession:
 
 
 @pytest.mark.asyncio
+@pytest.mark.live
 async def test_agent_runtime_streams_live_reply() -> None:
     if not get_settings().deepseek_api_key:
         pytest.skip("DeepSeek API key is not configured")
