@@ -1,8 +1,8 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.task import TASK_STATUSES
 
@@ -113,6 +113,7 @@ class TaskRead(BaseModel):
 
     id: UUID
     conversation_id: UUID | None
+    schedule_id: UUID | None = None
     name: str
     kind: str = "manual"
     input_: dict[str, Any] = Field(default_factory=dict, serialization_alias="input")
@@ -121,6 +122,12 @@ class TaskRead(BaseModel):
     error: str | None
     result: dict[str, Any] | None
     trace_id: str | None
+    idempotency_key: str | None = None
+    attempt_count: int = 0
+    max_attempts: int = 3
+    next_attempt_at: datetime | None = None
+    heartbeat_at: datetime | None = None
+    lease_expires_at: datetime | None = None
     metadata_: dict[str, Any] = Field(serialization_alias="metadata")
     created_at: datetime
     started_at: datetime | None = None
@@ -138,6 +145,89 @@ class AgentTaskCreate(BaseModel):
     prompt: str = Field(min_length=1, max_length=20_000)
     name: str | None = Field(default=None, min_length=1, max_length=200)
     conversation_id: UUID | None = None
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=200)
+    max_attempts: int | None = Field(default=None, ge=1, le=10)
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_agent_prompt(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("prompt must include non-whitespace text")
+        return value
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def validate_idempotency_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if len(value) < 8:
+            raise ValueError("idempotency_key must contain at least 8 non-whitespace characters")
+        return value
+
+
+class TaskScheduleCreate(BaseModel):
+    prompt: str = Field(min_length=1, max_length=20_000)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    conversation_id: UUID | None = None
+    schedule_kind: Literal["once", "interval", "daily"]
+    timezone: str = Field(default="UTC", min_length=1, max_length=80)
+    run_at: datetime | None = None
+    interval_minutes: int | None = Field(default=None, ge=1, le=525_600)
+    daily_time: str | None = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    max_attempts: int | None = Field(default=None, ge=1, le=10)
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_schedule_prompt(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("prompt must include non-whitespace text")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("timezone must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def validate_schedule_options(self) -> "TaskScheduleCreate":
+        if self.schedule_kind == "once" and self.run_at is None:
+            raise ValueError("run_at is required for a one-time schedule")
+        if self.schedule_kind == "interval" and self.interval_minutes is None:
+            raise ValueError("interval_minutes is required for an interval schedule")
+        if self.schedule_kind == "daily" and self.daily_time is None:
+            raise ValueError("daily_time is required for a daily schedule")
+        return self
+
+
+class TaskScheduleUpdate(BaseModel):
+    enabled: bool
+
+
+class TaskScheduleRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    conversation_id: UUID | None
+    name: str
+    prompt: str
+    schedule_kind: str
+    timezone: str
+    run_at: datetime | None
+    interval_seconds: int | None
+    daily_time: str | None
+    max_attempts: int
+    next_run_at: datetime | None
+    last_run_at: datetime | None
+    last_task_id: UUID | None
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
 
 
 class TaskUpdate(BaseModel):

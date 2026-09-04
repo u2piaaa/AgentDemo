@@ -103,6 +103,15 @@ def test_agent_task_payload_defaults() -> None:
 
     assert payload.name is None
     assert payload.conversation_id is None
+    assert payload.idempotency_key is None
+    assert payload.max_attempts is None
+
+
+def test_agent_task_payload_rejects_whitespace_prompt_and_key() -> None:
+    with pytest.raises(ValueError, match="non-whitespace"):
+        AgentTaskCreate(prompt="   ")
+    with pytest.raises(ValueError, match="non-whitespace characters"):
+        AgentTaskCreate(prompt="Analyze", idempotency_key="        ")
 
 
 def test_task_update_accepts_progress() -> None:
@@ -273,6 +282,32 @@ def test_create_agent_task_enqueues_owned_conversation() -> None:
     assert session.added.input_ == {"prompt": "Analyze the current project"}
     assert session.added.user_id == user.id
     assert scheduler.enqueued == [session.added.id]
+    assert session.added.max_attempts == 3
+    assert session.added.next_attempt_at is not None
+
+
+def test_create_agent_task_returns_existing_idempotent_task() -> None:
+    user = SimpleNamespace(id=uuid4())
+    existing = make_task(user.id)
+    existing.kind = "agent"
+    existing.input_ = {"prompt": "Analyze the current project"}
+    existing.idempotency_key = "request-12345678"
+    session = FakeSession(results=[FakeResult(scalar=existing)])
+    scheduler = FakeScheduler()
+    client = make_client(session, user, scheduler)
+
+    response = client.post(
+        "/api/tasks/agent",
+        json={
+            "prompt": "Analyze the current project",
+            "idempotency_key": "request-12345678",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["id"] == str(existing.id)
+    assert session.added is None
+    assert scheduler.enqueued == [existing.id]
 
 
 def test_get_task_rejects_other_users_task() -> None:

@@ -74,8 +74,17 @@ function TaskCard({ task, isCancelling, onCancel }: TaskCardProps) {
       <div className="task-meta">
         <span>{progress}%</span>
         {task.kind === "agent" ? <span>background agent</span> : null}
+        {task.schedule_id ? <span>scheduled</span> : null}
+        {task.max_attempts > 1 ? (
+          <span>attempt {task.attempt_count}/{task.max_attempts}</span>
+        ) : null}
         {task.trace_id ? <span title={task.trace_id}>{task.trace_id.slice(0, 10)}</span> : null}
       </div>
+      {task.status === "queued" && task.next_attempt_at && task.attempt_count > 0 ? (
+        <span className="task-retry-time">
+          Retry at {new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(new Date(task.next_attempt_at))}
+        </span>
+      ) : null}
       {events.length ? (
         <div className="task-events" aria-label="Latest task events">
           {events.slice(-3).map((event, index) => (

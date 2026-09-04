@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from dataclasses import asdict
 import json
+import logging
 import re
 from urllib.parse import unquote, urlparse
 from uuid import UUID, uuid4
@@ -32,6 +33,8 @@ from app.services.model_gateway import ModelGateway
 from app.services.plugin_registry import TOOL_PROVIDER_MCP_SERVER, PluginRegistry
 from app.services.rag import Citation, RagService
 from app.services.tool_executor import ToolExecutor
+
+logger = logging.getLogger(__name__)
 
 FETCH_DEFAULT_MAX_LENGTH = 8000
 SEARCH_FETCH_MAX_PAGES = 3
@@ -207,7 +210,10 @@ class AgentRuntime(AgentResponsePolicy):
             async for event in graph.astream(state, config=config, stream_mode="custom"):
                 yield event
         except Exception as exc:
-            yield self._event("error", {"message": str(exc), "trace_id": trace_id})
+            logger.exception("Agent runtime stream failed", extra={"trace_id": trace_id})
+            yield self._event(
+                "error", {"message": self._exception_message(exc), "trace_id": trace_id}
+            )
 
     async def stream_confirmed_tool(
         self, request: ToolConfirmationRequest
@@ -243,7 +249,17 @@ class AgentRuntime(AgentResponsePolicy):
             async for event in graph.astream(state, config=config, stream_mode="custom"):
                 yield event
         except Exception as exc:
-            yield self._event("error", {"message": str(exc), "trace_id": trace_id})
+            logger.exception(
+                "Confirmed agent runtime stream failed", extra={"trace_id": trace_id}
+            )
+            yield self._event(
+                "error", {"message": self._exception_message(exc), "trace_id": trace_id}
+            )
+
+    @staticmethod
+    def _exception_message(exc: Exception) -> str:
+        detail = str(exc).strip()
+        return detail or exc.__class__.__name__
 
     def _graph_config(self, state: AgentGraphState) -> dict:
         conversation_id = state.get("conversation_id")

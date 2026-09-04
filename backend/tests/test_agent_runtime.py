@@ -60,6 +60,10 @@ class FakeRag:
         return []
 
 
+def test_runtime_preserves_exception_type_when_message_is_empty() -> None:
+    assert AgentRuntime._exception_message(TimeoutError()) == "TimeoutError"
+
+
 class FakeGateway:
     def __init__(
         self,

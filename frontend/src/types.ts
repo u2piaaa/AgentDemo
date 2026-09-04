@@ -85,6 +85,7 @@ export type McpPrompt = {
 export type Task = {
   id: string;
   conversation_id: string | null;
+  schedule_id: string | null;
   name: string;
   kind: "manual" | "agent" | string;
   input: Record<string, unknown>;
@@ -93,10 +94,46 @@ export type Task = {
   error: string | null;
   result: Record<string, unknown> | null;
   trace_id: string | null;
+  idempotency_key: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  next_attempt_at: string | null;
+  heartbeat_at: string | null;
+  lease_expires_at: string | null;
   metadata?: Record<string, unknown>;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+};
+
+export type TaskSchedule = {
+  id: string;
+  conversation_id: string | null;
+  name: string;
+  prompt: string;
+  schedule_kind: "once" | "interval" | "daily";
+  timezone: string;
+  run_at: string | null;
+  interval_seconds: number | null;
+  daily_time: string | null;
+  max_attempts: number;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_task_id: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TaskScheduleCreateInput = {
+  prompt: string;
+  conversation_id: string | null;
+  schedule_kind: TaskSchedule["schedule_kind"];
+  timezone: string;
+  run_at?: string;
+  interval_minutes?: number;
+  daily_time?: string;
+  max_attempts: number;
 };
 
 export type AgentPlanData = {

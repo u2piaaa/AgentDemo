@@ -26,9 +26,12 @@ saves the final assistant message with trace metadata.
 - `backend/app/services/tool_executor.py`: argument validation, confirmation
   gate, timeout handling, output limiting, and tool-call audit logging.
 - `backend/app/services/agent_task_runner.py`: durable background agent worker
-  with persisted progress, results, cancellation, and tool audit binding.
-- `backend/app/services/task_scheduler.py`: in-process job scheduling, queued-job
-  resume, cancellation, and startup recovery.
+  with persisted progress, leases, heartbeats, bounded retries, cancellation,
+  and tool audit binding.
+- `backend/app/services/task_scheduler.py`: bounded-concurrency job scheduling,
+  due-schedule dispatch, queued-job resume, cancellation, and lease recovery.
+- `backend/app/services/task_schedules.py`: timezone-aware one-time, interval,
+  and daily schedule calculation with deterministic occurrence idempotency.
 - `backend/migrations`: Alembic schema, including `pgvector`, task ownership,
   tool-call audit fields, knowledge documents, and memory summaries.
 - `frontend/src/features`: extracted runtime-trace and background-task UI logic.
@@ -125,24 +128,45 @@ Supported operations:
 - `POST /api/tasks` creates a queued task with optional conversation id, trace
   id, and metadata.
 - `POST /api/tasks/agent` creates and immediately enqueues an autonomous agent
-  task from a prompt, with an optional name and conversation id.
+  task from a prompt, with optional name, conversation id, idempotency key, and
+  maximum-attempt policy.
 - `GET /api/tasks/{task_id}` returns an owned task.
 - `PATCH /api/tasks/{task_id}` updates status, progress, result, error, trace id,
   or metadata.
 - `POST /api/tasks/{task_id}/cancel` moves a cancellable task to `cancelled`.
 
 Statuses are `queued`, `running`, `succeeded`, `failed`, `cancelled`, and
-`stale`. Terminal states stay terminal. The scheduler resumes queued agent tasks
-after startup and marks interrupted running tasks as `stale`. Each background
-run persists coarse-grained runtime events, the final answer, citations, model
-route, timestamps, and a progress percentage. Tool calls retain the task id in
-the normal `ToolExecutor` audit path.
+`stale`. Terminal states stay terminal. Workers claim execution with a renewable
+lease and heartbeat. On startup, a live lease is preserved; an expired lease is
+re-queued when attempts remain and becomes `stale` only after its final attempt.
+Transient and unknown provider failures use bounded exponential backoff, while
+authentication, validation, permission, and confirmation failures stop
+immediately. The process-wide worker pool limits concurrent model runs, and retry
+delays do not occupy a concurrency slot.
+
+Scheduled Agent execution is mounted at `/api/task-schedules`:
+
+- `GET /api/task-schedules?conversation_id=<uuid>` lists owned schedules.
+- `POST /api/task-schedules` creates a timezone-aware `once`, `interval`, or
+  `daily` schedule.
+- `PATCH /api/task-schedules/{schedule_id}` pauses or resumes a schedule.
+- `POST /api/task-schedules/{schedule_id}/run` queues an immediate manual
+  occurrence without changing its normal next-run time.
+
+Every scheduled occurrence receives a deterministic, user-scoped idempotency
+key, so concurrent scheduler ticks cannot create duplicate work. Missed interval
+runs advance to the next future occurrence instead of producing a catch-up
+burst. Each background run persists coarse-grained runtime events, the final
+answer, citations, model route, timestamps, progress, attempt count, next retry,
+heartbeat, and lease. Tool calls retain the task id in the normal `ToolExecutor`
+audit path.
 
 Background execution uses separate database sessions for task progress and the
 LangGraph runtime. Tools that require interactive confirmation fail safely with
-guidance to use chat; they are never auto-approved. The frontend can launch a
-background run from the composer and renders progress, result text, failure
-details, and cancellation controls in the task panel.
+guidance to use chat; they are never auto-approved. The frontend can launch or
+schedule a prompt from the composer, pause/resume or immediately run schedules,
+and renders progress, retry state, result text, failure details, and cancellation
+controls in the Runtime inspector.
 
 See [Agent Architecture and Roadmap](docs/agent-architecture-roadmap.md) for the
 implemented capability map and next-stage priorities.
@@ -341,8 +365,11 @@ handoff checklist.
 ## Known Limitations
 
 - Background workers are in-process. Queued work resumes after a clean restart,
-  but multi-instance execution still needs distributed leases or a queue.
+  and database row locks plus leases prevent duplicate claims, but enforcing one
+  aggregate concurrency limit across many instances still needs a shared queue.
 - Confirmation-required tools remain an interactive-chat workflow; background
   tasks deliberately do not pause indefinitely for approval.
+- Schedules currently expose in-app state but do not yet deliver email, desktop,
+  or webhook notifications.
 - LangGraph coordinates execution, but durable node-level checkpoint/resume is a
   future capability beyond the current task-level persistence.

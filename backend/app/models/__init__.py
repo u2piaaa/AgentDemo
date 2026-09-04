@@ -2,6 +2,7 @@ from app.models.base import Base
 from app.models.conversation import Conversation, Message, MemorySummary
 from app.models.knowledge import KnowledgeChunk, KnowledgeDocument
 from app.models.task import Task
+from app.models.task_schedule import TaskSchedule
 from app.models.tool import Tool, ToolCall
 from app.models.user import User, UserSession
 
@@ -13,6 +14,7 @@ __all__ = [
     "MemorySummary",
     "Message",
     "Task",
+    "TaskSchedule",
     "Tool",
     "ToolCall",
     "User",

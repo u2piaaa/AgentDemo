@@ -16,6 +16,7 @@ class FakeSession:
     def __init__(self, task) -> None:
         self.task = task
         self.commits = 0
+        self.last_get_kwargs = {}
 
     async def __aenter__(self):
         return self
@@ -23,7 +24,8 @@ class FakeSession:
     async def __aexit__(self, exc_type, exc, traceback) -> None:
         return None
 
-    async def get(self, model, task_id):
+    async def get(self, model, task_id, **kwargs):
+        self.last_get_kwargs = kwargs
         return self.task if self.task.id == task_id else None
 
     async def commit(self) -> None:
@@ -112,6 +114,11 @@ def make_task():
         created_at=datetime.now(UTC),
         started_at=None,
         finished_at=None,
+        attempt_count=0,
+        max_attempts=3,
+        next_attempt_at=None,
+        heartbeat_at=None,
+        lease_expires_at=None,
     )
 
 
@@ -134,6 +141,8 @@ async def test_agent_task_runner_persists_success_and_runtime_identity() -> None
     assert task.result["answer"] == "Completed in the background."
     assert task.started_at is not None
     assert task.finished_at is not None
+    assert task.attempt_count == 1
+    assert task.lease_expires_at is None
     assert [item["type"] for item in task.metadata_["events"]] == ["status", "done"]
     assert SuccessfulRuntime.init_kwargs["task_id"] == task.id
     assert SuccessfulRuntime.init_kwargs["user_id"] == task.user_id
@@ -141,6 +150,7 @@ async def test_agent_task_runner_persists_success_and_runtime_identity() -> None
     assert SuccessfulRuntime.request.task_type == "background"
     assert SuccessfulRuntime.request.message == "Research the topic"
     assert runner.session_factory.calls == 2
+    assert session.last_get_kwargs == {"with_for_update": {"skip_locked": True}}
 
 
 @pytest.mark.asyncio
@@ -158,6 +168,89 @@ async def test_agent_task_runner_fails_safely_when_tool_confirmation_is_needed()
     assert task.status == "failed"
     assert "interactive chat" in task.error
     assert task.finished_at is not None
+
+
+class TransientFailureRuntime:
+    def __init__(self, **kwargs) -> None:
+        pass
+
+    async def stream(self, request):
+        raise TimeoutError("upstream timed out")
+        yield
+
+
+class AuthenticationFailureRuntime:
+    def __init__(self, **kwargs) -> None:
+        pass
+
+    async def stream(self, request):
+        raise RuntimeError("invalid API key")
+        yield
+
+
+@pytest.mark.asyncio
+async def test_agent_task_runner_retries_transient_failure_with_backoff() -> None:
+    task = make_task()
+    session = FakeSession(task)
+    runner = AgentTaskRunner(
+        FakeSessionFactory(session),  # type: ignore[arg-type]
+        object(),
+        runtime_factory=TransientFailureRuntime,
+        retry_base_seconds=1,
+    )
+
+    outcome = await runner.run(task.id)
+
+    assert task.status == "queued"
+    assert task.attempt_count == 1
+    assert task.next_attempt_at is not None
+    assert outcome.retry_at == task.next_attempt_at
+    assert "retry scheduled" in task.error
+    assert task.metadata_["events"][-1]["type"] == "retry_scheduled"
+
+
+@pytest.mark.asyncio
+async def test_agent_task_runner_does_not_retry_authentication_failure() -> None:
+    task = make_task()
+    session = FakeSession(task)
+    runner = AgentTaskRunner(
+        FakeSessionFactory(session),  # type: ignore[arg-type]
+        object(),
+        runtime_factory=AuthenticationFailureRuntime,
+    )
+
+    outcome = await runner.run(task.id)
+
+    assert outcome.retry_at is None
+    assert task.status == "failed"
+    assert task.attempt_count == 1
+    assert task.next_attempt_at is None
+
+
+class UnknownFailureRuntime:
+    def __init__(self, **kwargs) -> None:
+        pass
+
+    async def stream(self, request):
+        raise RuntimeError("provider stream closed")
+        yield
+
+
+@pytest.mark.asyncio
+async def test_agent_task_runner_retries_unknown_provider_failure() -> None:
+    task = make_task()
+    session = FakeSession(task)
+    runner = AgentTaskRunner(
+        FakeSessionFactory(session),  # type: ignore[arg-type]
+        object(),
+        runtime_factory=UnknownFailureRuntime,
+        retry_base_seconds=1,
+    )
+
+    outcome = await runner.run(task.id)
+
+    assert outcome.retry_at is not None
+    assert task.status == "queued"
 
 
 class WaitingRuntime:
@@ -186,12 +279,36 @@ async def test_agent_task_runner_marks_cancelled_when_worker_is_cancelled() -> N
     job = asyncio.create_task(runner.run(task.id))
     await WaitingRuntime.started.wait()
 
+    # The API writes the terminal status before cancelling its in-process worker.
+    task.status = "cancelled"
     job.cancel()
     with pytest.raises(asyncio.CancelledError):
         await job
 
     assert task.status == "cancelled"
-    assert task.finished_at is not None
+
+
+@pytest.mark.asyncio
+async def test_agent_task_runner_requeues_worker_interrupted_by_shutdown() -> None:
+    WaitingRuntime.started = asyncio.Event()
+    task = make_task()
+    session = FakeSession(task)
+    runner = AgentTaskRunner(
+        FakeSessionFactory(session),  # type: ignore[arg-type]
+        object(),
+        runtime_factory=WaitingRuntime,
+    )
+    job = asyncio.create_task(runner.run(task.id))
+    await WaitingRuntime.started.wait()
+
+    job.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await job
+
+    assert task.status == "queued"
+    assert task.attempt_count == 0
+    assert task.next_attempt_at is not None
+    assert task.lease_expires_at is None
 
 
 class CaptureExecutor:

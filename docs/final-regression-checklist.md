@@ -119,24 +119,30 @@ With backend and frontend running:
 8. Cancel a running background task and verify it becomes `cancelled` with a
    completion timestamp.
 9. Restart the backend with a manually created `running` task and verify startup
-   recovery marks it `stale`.
-10. Confirm a tool requiring confirmation is shown as blocked, then approve it
+   recovery preserves a live lease, re-queues an expired task with attempts
+   remaining, and marks an exhausted task `stale`.
+10. Create one-time, interval, and daily schedules; verify timezone-aware next
+    runs, pause/resume, immediate run, deterministic occurrence idempotency, and
+    skipped catch-up bursts.
+11. Force a transient provider failure and verify the task shows attempt count
+    and next retry while another task can use the released concurrency slot.
+12. Confirm a tool requiring confirmation is shown as blocked, then approve it
     and verify a continuation stream runs the tool and writes a follow-up
     assistant response.
-11. Continue a long conversation past the configured memory window and verify an
+13. Continue a long conversation past the configured memory window and verify an
     active memory summary is generated or updated when model credentials are
     configured. Without credentials, verify chat still succeeds and memory
     refresh is skipped.
-12. Verify no MCP config still leaves normal chat, RAG, tasks, and local tools
+14. Verify no MCP config still leaves normal chat, RAG, tasks, and local tools
     working.
-13. Verify the MCP server adapter lists `read_file`, `list_dir`, and
+15. Verify the MCP server adapter lists `read_file`, `list_dir`, and
     `search_files`.
-14. Verify MCP `read_file` cannot read outside the workspace.
-15. Verify a fake MCP tool appears in the tool list, can be planned by runtime,
+16. Verify MCP `read_file` cannot read outside the workspace.
+17. Verify a fake MCP tool appears in the tool list, can be planned by runtime,
     writes a tool-call audit, and writes task metadata events.
-16. Verify MCP resource import creates a `mcp_resource` knowledge document and
+18. Verify MCP resource import creates a `mcp_resource` knowledge document and
     citations show the MCP `source_uri`.
-17. Verify the frontend MCP panel handles empty, connected, and error states
+19. Verify the frontend MCP panel handles empty, connected, and error states
     without breaking chat.
 
 ## Release Notes To Record

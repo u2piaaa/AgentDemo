@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: int = 120
     embedding_dimensions: int = 1536
     agent_memory_message_limit: int = 12
+    agent_task_max_concurrency: int = 2
+    agent_task_default_max_attempts: int = 3
+    agent_task_retry_base_seconds: int = 5
+    agent_task_lease_seconds: int = 180
+    agent_task_heartbeat_seconds: int = 15
+    task_schedule_poll_seconds: int = 5
     web_search_provider: str = "disabled"
     web_search_api_key: str = ""
     web_search_base_url: str = ""

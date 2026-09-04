@@ -31,7 +31,8 @@ body {
 
 button,
 textarea,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -42,7 +43,8 @@ button {
 
 button:focus-visible,
 textarea:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 3px solid rgba(23, 107, 135, 0.35);
   outline-offset: 2px;
 }
@@ -703,6 +705,81 @@ input:focus-visible {
   background: #edf3f6;
 }
 
+.schedule-composer {
+  position: relative;
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #b9c8d4;
+  border-radius: 8px;
+  padding: 10px 12px 12px;
+  background: #ffffff;
+}
+
+.schedule-composer legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 6px;
+  color: #21313f;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.composer .schedule-composer label {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+  grid-column: auto;
+  margin-top: 2px;
+}
+
+.schedule-composer input,
+.schedule-composer select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid #b9c8d4;
+  border-radius: 8px;
+  padding: 0 10px;
+  background: var(--surface);
+  color: #182633;
+}
+
+.schedule-composer small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.schedule-close {
+  position: absolute;
+  top: -4px;
+  right: 4px;
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #435563;
+}
+
+.schedule-close:hover:not(:disabled) {
+  background: var(--surface-soft);
+}
+
+.schedule-submit {
+  justify-self: start;
+  padding: 0 14px;
+}
+
 .send-button {
   min-width: 112px;
   padding: 0 18px;
@@ -854,6 +931,40 @@ input:focus-visible {
   border-radius: 8px;
   padding: 11px;
   background: var(--surface-soft);
+}
+
+.schedule-card {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 11px;
+  background: var(--surface-soft);
+}
+
+.schedule-card p {
+  margin: 0;
+  color: #263746;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.schedule-next,
+.task-retry-time {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.schedule-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.schedule-actions .compact {
+  min-height: 44px;
 }
 
 .task-progress {

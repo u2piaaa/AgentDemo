@@ -3,6 +3,7 @@ import {
   AlertCircle,
   BookOpen,
   Bot,
+  CalendarClock,
   Check,
   CheckCircle2,
   CircleDot,
@@ -30,6 +31,7 @@ import {
   clearAuthToken,
   createAgentTask,
   createConversation,
+  createTaskSchedule,
   deleteConversation,
   getCurrentUser,
   getAuthStatus,
@@ -40,17 +42,22 @@ import {
   getMcpResources,
   getMcpServers,
   getTasks,
+  getTaskSchedules,
   getTools,
   login,
   register,
   setAccessToken,
   setAuthToken,
+  setTaskScheduleEnabled,
   streamChat,
   streamConfirmedTool,
+  runTaskScheduleNow,
   updateConversationTitle,
   uploadDocument
 } from "./api";
 import { TaskList } from "./features/tasks/TaskList";
+import { ScheduleComposer } from "./features/tasks/ScheduleComposer";
+import { ScheduleList } from "./features/tasks/ScheduleList";
 import { isTaskTerminal, taskStatusLabel } from "./features/tasks/taskUtils";
 import {
   appendTraceStatus,
@@ -82,6 +89,8 @@ import type {
   McpServer,
   StreamEvent,
   Task,
+  TaskSchedule,
+  TaskScheduleCreateInput,
   ToolManifest,
   User
 } from "./types";
@@ -124,6 +133,14 @@ export function App() {
   const [isLoadingTasks, setIsLoadingTasks] = useState(false);
   const [isCreatingTask, setIsCreatingTask] = useState(false);
   const [cancellingTaskIds, setCancellingTaskIds] = useState<Set<string>>(() => new Set());
+  const [schedules, setSchedules] = useState<TaskSchedule[]>([]);
+  const [scheduleError, setScheduleError] = useState("");
+  const [isLoadingSchedules, setIsLoadingSchedules] = useState(false);
+  const [isCreatingSchedule, setIsCreatingSchedule] = useState(false);
+  const [isScheduleComposerOpen, setIsScheduleComposerOpen] = useState(false);
+  const [updatingScheduleIds, setUpdatingScheduleIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const [uploadStatus, setUploadStatus] = useState("No document uploaded in this chat.");
   const [isUploading, setIsUploading] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -201,6 +218,7 @@ export function App() {
       setDocuments([]);
       setCitations([]);
       setTasks([]);
+      setSchedules([]);
       executionTraceRef.current = {};
       setExecutionTraces({});
       setConfirmationDecisions({});
@@ -262,6 +280,9 @@ export function App() {
       setTasks([]);
       setTaskError("");
       setIsLoadingTasks(false);
+      setSchedules([]);
+      setScheduleError("");
+      setIsLoadingSchedules(false);
       return;
     }
 
@@ -269,9 +290,13 @@ export function App() {
     async function loadConversationTasks(showLoading: boolean) {
       if (showLoading) {
         setIsLoadingTasks(true);
+        setIsLoadingSchedules(true);
       }
       try {
-        const loadedTasks = await getTasks(activeConversationId);
+        const [loadedTasks, loadedSchedules] = await Promise.all([
+          getTasks(activeConversationId),
+          getTaskSchedules(activeConversationId)
+        ]);
         if (!isActive) return;
         const completedTask = loadedTasks.find((task) => {
           const previousStatus = taskStatusRef.current[task.id];
@@ -285,16 +310,20 @@ export function App() {
           loadedTasks.map((task) => [task.id, task.status])
         );
         setTasks(loadedTasks);
+        setSchedules(loadedSchedules);
         setTaskError("");
+        setScheduleError("");
         if (completedTask && !isStreaming) {
           setStatus(taskStatusLabel(completedTask.status));
         }
       } catch (error) {
         if (!isActive) return;
         setTaskError(error instanceof Error ? error.message : "Failed to load tasks");
+        setScheduleError(error instanceof Error ? error.message : "Failed to load schedules");
       } finally {
         if (isActive) {
           setIsLoadingTasks(false);
+          setIsLoadingSchedules(false);
         }
       }
     }
@@ -337,6 +366,7 @@ export function App() {
     setCitations([]);
     setDocuments([]);
     setTasks([]);
+    setSchedules([]);
     executionTraceRef.current = {};
     setExecutionTraces({});
     setConfirmationDecisions({});
@@ -407,6 +437,8 @@ export function App() {
     setDocuments([]);
     setTasks([]);
     setTaskError("");
+    setSchedules([]);
+    setScheduleError("");
     setCitations([]);
     executionTraceRef.current = {};
     setExecutionTraces({});
@@ -500,6 +532,96 @@ export function App() {
       setStatus(message);
     } finally {
       setIsCreatingTask(false);
+    }
+  }
+
+  async function handleCreateSchedule(
+    draft: Omit<TaskScheduleCreateInput, "prompt" | "conversation_id">
+  ) {
+    const text = input.trim();
+    if (!text || isStreaming || isCreatingSchedule) return;
+    setIsCreatingSchedule(true);
+    setScheduleError("");
+    setStatus("Creating schedule");
+    try {
+      let conversationId = activeConversationId;
+      if (!conversationId) {
+        const conversation = await createConversation(text.slice(0, 80));
+        conversationId = conversation.id;
+        setConversations((current) => [conversation, ...current]);
+        setActiveConversationId(conversation.id);
+        setMessages([]);
+        setDocuments([]);
+        setCitations([]);
+        setTasks([]);
+        setSchedules([]);
+        executionTraceRef.current = {};
+        setExecutionTraces({});
+        setConfirmationDecisions({});
+      }
+      const schedule = await createTaskSchedule({
+        ...draft,
+        prompt: text,
+        conversation_id: conversationId
+      });
+      setSchedules((current) => [
+        schedule,
+        ...current.filter((item) => item.id !== schedule.id)
+      ]);
+      setInput("");
+      setIsScheduleComposerOpen(false);
+      setStatus("Schedule created");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to create schedule";
+      setScheduleError(message);
+      setStatus(message);
+    } finally {
+      setIsCreatingSchedule(false);
+    }
+  }
+
+  async function handleToggleSchedule(schedule: TaskSchedule) {
+    if (updatingScheduleIds.has(schedule.id)) return;
+    setUpdatingScheduleIds((current) => new Set(current).add(schedule.id));
+    setScheduleError("");
+    try {
+      const updated = await setTaskScheduleEnabled(schedule.id, !schedule.enabled);
+      setSchedules((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item))
+      );
+      setStatus(updated.enabled ? "Schedule resumed" : "Schedule paused");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update schedule";
+      setScheduleError(message);
+      setStatus(message);
+    } finally {
+      setUpdatingScheduleIds((current) => {
+        const next = new Set(current);
+        next.delete(schedule.id);
+        return next;
+      });
+    }
+  }
+
+  async function handleRunScheduleNow(schedule: TaskSchedule) {
+    if (updatingScheduleIds.has(schedule.id)) return;
+    setUpdatingScheduleIds((current) => new Set(current).add(schedule.id));
+    setScheduleError("");
+    try {
+      const task = await runTaskScheduleNow(schedule.id);
+      taskStatusRef.current = { ...taskStatusRef.current, [task.id]: task.status };
+      setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
+      setStatus("Scheduled task queued now");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to run schedule";
+      setScheduleError(message);
+      setStatus(message);
+    } finally {
+      setUpdatingScheduleIds((current) => {
+        const next = new Set(current);
+        next.delete(schedule.id);
+        return next;
+      });
     }
   }
 
@@ -1129,7 +1251,25 @@ export function App() {
                 placeholder="Ask the agent to plan, retrieve, call tools, or summarize."
                 rows={3}
               />
+              <ScheduleComposer
+                open={isScheduleComposerOpen}
+                disabled={isStreaming || !input.trim()}
+                isCreating={isCreatingSchedule}
+                error={scheduleError}
+                onClose={() => setIsScheduleComposerOpen(false)}
+                onCreate={handleCreateSchedule}
+              />
               <div className="composer-actions">
+                <button
+                  className="background-task-button"
+                  type="button"
+                  aria-expanded={isScheduleComposerOpen}
+                  disabled={isStreaming || isCreatingTask || !input.trim()}
+                  onClick={() => setIsScheduleComposerOpen((current) => !current)}
+                >
+                  <CalendarClock size={18} aria-hidden="true" />
+                  Schedule
+                </button>
                 <button
                   className="background-task-button"
                   type="button"
@@ -1164,6 +1304,20 @@ export function App() {
                 <X size={18} aria-hidden="true" />
               </button>
             </div>
+            <section>
+              <div className="section-title">
+                <CalendarClock size={18} aria-hidden="true" />
+                <h3>Schedules</h3>
+              </div>
+              <ScheduleList
+                schedules={schedules}
+                error={scheduleError}
+                isLoading={isLoadingSchedules}
+                updatingIds={updatingScheduleIds}
+                onToggle={(schedule) => void handleToggleSchedule(schedule)}
+                onRunNow={(schedule) => void handleRunScheduleNow(schedule)}
+              />
+            </section>
             <section>
               <div className="section-title">
                 <ClipboardList size={18} aria-hidden="true" />

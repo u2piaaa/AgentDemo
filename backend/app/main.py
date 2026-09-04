@@ -7,7 +7,17 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, conversations, health, knowledge, mcp, memory, tasks, tools
+from app.api.routes import (
+    auth,
+    conversations,
+    health,
+    knowledge,
+    mcp,
+    memory,
+    task_schedules,
+    tasks,
+    tools,
+)
 from app.core.config import get_settings
 from app.mcp.client import McpClientManager
 from app.mcp.config import load_mcp_config
@@ -68,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router, prefix="/api")
     app.include_router(conversations.router, prefix="/api")
     app.include_router(tasks.router, prefix="/api")
+    app.include_router(task_schedules.router, prefix="/api")
     app.include_router(knowledge.router, prefix="/api")
     app.include_router(memory.router, prefix="/api")
     app.include_router(tools.router, prefix="/api")

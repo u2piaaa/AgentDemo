@@ -8,6 +8,8 @@ import type {
   McpServer,
   StreamEvent,
   Task,
+  TaskSchedule,
+  TaskScheduleCreateInput,
   ToolCallData,
   ToolManifest,
   ToolResultData,
@@ -216,6 +218,49 @@ export async function cancelTask(taskId: string): Promise<Task> {
     headers: authHeaders()
   });
   if (!response.ok) throw new Error(await readError(response, "Failed to cancel task"));
+  return response.json();
+}
+
+export async function getTaskSchedules(
+  conversationId: string | null
+): Promise<TaskSchedule[]> {
+  const query = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : "";
+  const response = await fetch(`/api/task-schedules${query}`, { headers: authHeaders() });
+  if (!response.ok) throw new Error(await readError(response, "Failed to load schedules"));
+  return response.json();
+}
+
+export async function createTaskSchedule(
+  payload: TaskScheduleCreateInput
+): Promise<TaskSchedule> {
+  const response = await fetch("/api/task-schedules", {
+    method: "POST",
+    headers: jsonAuthHeaders(),
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) throw new Error(await readError(response, "Failed to create schedule"));
+  return response.json();
+}
+
+export async function setTaskScheduleEnabled(
+  scheduleId: string,
+  enabled: boolean
+): Promise<TaskSchedule> {
+  const response = await fetch(`/api/task-schedules/${scheduleId}`, {
+    method: "PATCH",
+    headers: jsonAuthHeaders(),
+    body: JSON.stringify({ enabled })
+  });
+  if (!response.ok) throw new Error(await readError(response, "Failed to update schedule"));
+  return response.json();
+}
+
+export async function runTaskScheduleNow(scheduleId: string): Promise<Task> {
+  const response = await fetch(`/api/task-schedules/${scheduleId}/run`, {
+    method: "POST",
+    headers: authHeaders()
+  });
+  if (!response.ok) throw new Error(await readError(response, "Failed to run schedule"));
   return response.json();
 }
 

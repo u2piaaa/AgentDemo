@@ -3,9 +3,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routes.auth import CurrentUser
+from app.core.config import get_settings
 from app.db.database import get_session
 from app.models.conversation import Conversation
 from app.models.task import (
@@ -62,6 +64,8 @@ async def create_task(
         conversation_id=payload.conversation_id,
         status=TASK_STATUS_QUEUED,
         progress=0,
+        attempt_count=0,
+        max_attempts=1,
         trace_id=payload.trace_id,
         metadata_=payload.metadata,
     )
@@ -86,6 +90,16 @@ async def create_agent_task(
             raise HTTPException(status_code=404, detail="Conversation not found")
 
     prompt = payload.prompt.strip()
+    idempotency_key = payload.idempotency_key.strip() if payload.idempotency_key else None
+    if idempotency_key:
+        existing = await get_task_by_idempotency_key(
+            session, current_user.id, idempotency_key
+        )
+        if existing is not None:
+            scheduler = getattr(request.app.state, "task_scheduler", None)
+            if scheduler is not None and existing.status == TASK_STATUS_QUEUED:
+                scheduler.enqueue(existing.id)
+            return existing
     task = Task(
         name=(payload.name or _agent_task_name(prompt)).strip(),
         kind=TASK_KIND_AGENT,
@@ -94,10 +108,27 @@ async def create_agent_task(
         conversation_id=payload.conversation_id,
         status=TASK_STATUS_QUEUED,
         progress=0,
+        idempotency_key=idempotency_key,
+        attempt_count=0,
+        max_attempts=payload.max_attempts or get_settings().agent_task_default_max_attempts,
+        next_attempt_at=datetime.now(UTC),
         metadata_={"events": []},
     )
     session.add(task)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        if idempotency_key:
+            existing = await get_task_by_idempotency_key(
+                session, current_user.id, idempotency_key
+            )
+            if existing is not None:
+                scheduler = getattr(request.app.state, "task_scheduler", None)
+                if scheduler is not None and existing.status == TASK_STATUS_QUEUED:
+                    scheduler.enqueue(existing.id)
+                return existing
+        raise
     await session.refresh(task)
 
     scheduler = getattr(request.app.state, "task_scheduler", None)
@@ -214,6 +245,20 @@ async def get_owned_task(session: AsyncSession, task_id: UUID, user_id: UUID) ->
         select(Task).where(
             Task.id == task_id,
             Task.user_id == user_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_task_by_idempotency_key(
+    session: AsyncSession,
+    user_id: UUID,
+    idempotency_key: str,
+) -> Task | None:
+    result = await session.execute(
+        select(Task).where(
+            Task.user_id == user_id,
+            Task.idempotency_key == idempotency_key,
         )
     )
     return result.scalar_one_or_none()

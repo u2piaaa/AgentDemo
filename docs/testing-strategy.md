@@ -23,7 +23,7 @@ Useful targeted suites:
 .\.venv\Scripts\python.exe -m pytest tests/test_plugin_registry.py tests/test_tool_executor.py tests/test_read_file_plugin.py
 .\.venv\Scripts\python.exe -m pytest tests/test_agent_runtime.py tests/test_model_gateway.py
 .\.venv\Scripts\python.exe -m pytest tests/test_rag.py tests/test_memory_routes.py
-.\.venv\Scripts\python.exe -m pytest tests/test_task_scheduler.py tests/test_agent_task_runner.py tests/test_task_routes.py
+.\.venv\Scripts\python.exe -m pytest tests/test_task_scheduler.py tests/test_agent_task_runner.py tests/test_task_routes.py tests/test_task_schedules.py tests/test_task_schedule_routes.py
 ```
 
 Backend coverage priorities:
@@ -33,8 +33,10 @@ Backend coverage priorities:
 - User-owned routes reject cross-user conversations, tasks, and memory
   summaries.
 - Task status transitions reject invalid moves and terminal-state changes.
-- Startup task recovery marks old `running` tasks as `stale`.
-- Background agent tasks persist progress/results, bind tool audits to task ids,
+- Startup recovery preserves live leases, re-queues abandoned work with attempts
+  remaining, and marks exhausted work as `stale`.
+- Background agent tasks persist progress/results, renew leases and heartbeats,
+  apply bounded retry backoff, bind tool audits to task ids,
   cancel cleanly, and fail safely when interactive confirmation is required.
 - Plugin manifests load, disabled tools stay unavailable, and invalid manifests
   do not break registry loading.
@@ -59,7 +61,8 @@ npm run build
 npm audit --audit-level=high
 ```
 
-Vitest covers SSE parsing, persisted runtime traces, and task rendering helpers.
+Vitest covers SSE parsing, persisted runtime traces, task rendering helpers, and
+schedule descriptions.
 The build runs `tsc` and `vite build`; the audit blocks high-severity dependency
 findings.
 

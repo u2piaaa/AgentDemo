@@ -1,12 +1,15 @@
 import asyncio
 import json
-from datetime import UTC, datetime
+from contextlib import suppress
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.runtime import AgentRuntime
+from app.core.config import get_settings
 from app.models.task import (
     TASK_KIND_AGENT,
     TASK_STATUS_CANCELLED,
@@ -21,6 +24,7 @@ from app.schemas import ChatRequest
 PERSISTED_EVENT_TYPES = {"status", "plan", "tool_call", "tool_result", "done", "error"}
 MAX_TASK_EVENTS = 100
 CONFIRMATION_REQUIRED_ERROR = "Tool requires confirmation before execution"
+INTERRUPTED_TASK_ERROR = "Execution interrupted; task safely returned to the queue"
 
 STATUS_PROGRESS = {
     "ensure_conversation": 5,
@@ -37,6 +41,39 @@ EVENT_PROGRESS = {
     "tool_result": 65,
     "done": 100,
 }
+NON_RETRYABLE_ERROR_MARKERS = (
+    "authentication",
+    "confirmation",
+    "forbidden",
+    "invalid api key",
+    "invalid input",
+    "missing api key",
+    "not include a prompt",
+    "not available",
+    "outside workspace",
+    "permission denied",
+    "requires confirmation",
+    "unauthorized",
+)
+RETRYABLE_ERROR_MARKERS = (
+    "429",
+    "500",
+    "502",
+    "503",
+    "504",
+    "connection",
+    "network",
+    "rate limit",
+    "temporarily",
+    "timeout",
+    "timed out",
+    "unavailable",
+)
+
+
+@dataclass(frozen=True)
+class TaskRunOutcome:
+    retry_at: datetime | None = None
 
 
 class AgentTaskRunner:
@@ -47,35 +84,62 @@ class AgentTaskRunner:
         session_factory: async_sessionmaker[AsyncSession],
         tool_registry,
         runtime_factory=AgentRuntime,
+        *,
+        retry_base_seconds: int | None = None,
+        lease_seconds: int | None = None,
+        heartbeat_seconds: int | None = None,
     ) -> None:
+        settings = get_settings()
         self.session_factory = session_factory
         self.tool_registry = tool_registry
         self.runtime_factory = runtime_factory
+        self.retry_base_seconds = max(
+            retry_base_seconds or settings.agent_task_retry_base_seconds, 1
+        )
+        self.lease_seconds = max(lease_seconds or settings.agent_task_lease_seconds, 5)
+        self.heartbeat_seconds = max(
+            heartbeat_seconds or settings.agent_task_heartbeat_seconds, 1
+        )
 
-    async def run(self, task_id: UUID) -> None:
+    async def run(self, task_id: UUID) -> TaskRunOutcome:
         async with self.session_factory() as task_session:
-            task = await task_session.get(Task, task_id)
+            # Serialize the queued -> running claim across scheduler processes.
+            # A competing worker skips the locked row and returns without running it.
+            task = await task_session.get(
+                Task,
+                task_id,
+                with_for_update={"skip_locked": True},
+            )
             if task is None or task.kind != TASK_KIND_AGENT or task.status != TASK_STATUS_QUEUED:
-                return
+                return TaskRunOutcome()
 
             prompt = str((task.input_ or {}).get("prompt") or "").strip()
             if not prompt:
                 await self._finish_failed(
                     task_session, task, "Agent task input did not include a prompt"
                 )
-                return
+                return TaskRunOutcome()
 
+            now = datetime.now(UTC)
+            next_attempt_at = getattr(task, "next_attempt_at", None)
+            if next_attempt_at is not None and next_attempt_at > now:
+                return TaskRunOutcome(retry_at=next_attempt_at)
             task.status = TASK_STATUS_RUNNING
             task.progress = max(task.progress or 0, 1)
             task.error = None
-            task.started_at = datetime.now(UTC)
+            task.attempt_count = (getattr(task, "attempt_count", 0) or 0) + 1
+            task.started_at = task.started_at or now
             task.finished_at = None
+            task.next_attempt_at = None
+            task.heartbeat_at = now
+            task.lease_expires_at = now + timedelta(seconds=self.lease_seconds)
             await task_session.commit()
 
             answer_parts: list[str] = []
             done_payload: dict[str, Any] | None = None
             failure: str | None = None
 
+            heartbeat_job = asyncio.create_task(self._heartbeat_loop(task.id))
             try:
                 async with self.session_factory() as runtime_session:
                     runtime = self.runtime_factory(
@@ -114,27 +178,50 @@ class AgentTaskRunner:
                                 task_session, task, event_type, data
                             )
             except asyncio.CancelledError:
-                task.status = TASK_STATUS_CANCELLED
-                task.finished_at = datetime.now(UTC)
+                # The cancellation endpoint persists `cancelled` before stopping
+                # the worker. Other cancellations (notably service shutdown) must
+                # remain resumable and must not consume a retry attempt.
+                await task_session.refresh(task)
+                if task.status != TASK_STATUS_CANCELLED:
+                    task.status = TASK_STATUS_QUEUED
+                    task.error = INTERRUPTED_TASK_ERROR
+                    task.attempt_count = max((task.attempt_count or 1) - 1, 0)
+                    task.finished_at = None
+                    task.next_attempt_at = datetime.now(UTC)
+                task.lease_expires_at = None
                 await task_session.commit()
                 raise
             except Exception as exc:
-                await self._finish_failed(task_session, task, str(exc))
-                return
+                return await self._finish_or_retry(
+                    task_session,
+                    task,
+                    str(exc),
+                    retryable=self._is_retryable_error(str(exc)),
+                )
+            finally:
+                heartbeat_job.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat_job
 
             # Cancellation is written through a separate request session, so refresh
             # before committing a terminal result to avoid overwriting it in a race.
             await task_session.refresh(task)
             if task.status == TASK_STATUS_CANCELLED:
-                return
+                return TaskRunOutcome()
             if failure is not None:
-                await self._finish_failed(task_session, task, failure)
-                return
-            if done_payload is None:
-                await self._finish_failed(
-                    task_session, task, "Agent task ended without a completion event"
+                return await self._finish_or_retry(
+                    task_session,
+                    task,
+                    failure,
+                    retryable=self._is_retryable_error(failure),
                 )
-                return
+            if done_payload is None:
+                return await self._finish_or_retry(
+                    task_session,
+                    task,
+                    "Agent task ended without a completion event",
+                    retryable=True,
+                )
 
             conversation_id = done_payload.get("conversation_id")
             if conversation_id:
@@ -150,7 +237,11 @@ class AgentTaskRunner:
                 "model_route": done_payload.get("model_route"),
             }
             task.finished_at = datetime.now(UTC)
+            task.next_attempt_at = None
+            task.heartbeat_at = datetime.now(UTC)
+            task.lease_expires_at = None
             await task_session.commit()
+            return TaskRunOutcome()
 
     async def _record_event(
         self,
@@ -174,13 +265,77 @@ class AgentTaskRunner:
         trace_id = data.get("trace_id")
         if trace_id:
             task.trace_id = str(trace_id)
+        now = datetime.now(UTC)
+        task.heartbeat_at = now
+        task.lease_expires_at = now + timedelta(seconds=self.lease_seconds)
         await session.commit()
 
     async def _finish_failed(self, session: AsyncSession, task: Task, error: str) -> None:
         task.status = TASK_STATUS_FAILED
         task.error = error or "Background agent task failed"
         task.finished_at = datetime.now(UTC)
+        task.next_attempt_at = None
+        task.lease_expires_at = None
         await session.commit()
+
+    async def _finish_or_retry(
+        self,
+        session: AsyncSession,
+        task: Task,
+        error: str,
+        *,
+        retryable: bool,
+    ) -> TaskRunOutcome:
+        attempts = getattr(task, "attempt_count", 0) or 0
+        max_attempts = max(getattr(task, "max_attempts", 1) or 1, 1)
+        if retryable and attempts < max_attempts:
+            delay_seconds = min(self.retry_base_seconds * (2 ** max(attempts - 1, 0)), 3600)
+            retry_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
+            task.status = TASK_STATUS_QUEUED
+            task.error = f"Attempt {attempts}/{max_attempts} failed; retry scheduled: {error}"
+            task.finished_at = None
+            task.next_attempt_at = retry_at
+            task.lease_expires_at = None
+            metadata = dict(task.metadata_ or {})
+            events = list(metadata.get("events") or [])
+            events.append(
+                {
+                    "type": "retry_scheduled",
+                    "at": datetime.now(UTC).isoformat(),
+                    "attempt": attempts,
+                    "max_attempts": max_attempts,
+                    "retry_at": retry_at.isoformat(),
+                    "error": error,
+                }
+            )
+            metadata["events"] = events[-MAX_TASK_EVENTS:]
+            task.metadata_ = metadata
+            await session.commit()
+            return TaskRunOutcome(retry_at=retry_at)
+        await self._finish_failed(session, task, error)
+        return TaskRunOutcome()
+
+    async def _heartbeat_loop(self, task_id: UUID) -> None:
+        while True:
+            await asyncio.sleep(self.heartbeat_seconds)
+            async with self.session_factory() as session:
+                task = await session.get(Task, task_id)
+                if task is None or task.status != TASK_STATUS_RUNNING:
+                    return
+                now = datetime.now(UTC)
+                task.heartbeat_at = now
+                task.lease_expires_at = now + timedelta(seconds=self.lease_seconds)
+                await session.commit()
+
+    def _is_retryable_error(self, error: str) -> bool:
+        lowered = error.casefold()
+        if any(marker in lowered for marker in NON_RETRYABLE_ERROR_MARKERS):
+            return False
+        if any(marker in lowered for marker in RETRYABLE_ERROR_MARKERS):
+            return True
+        # Unknown provider or infrastructure failures are retried within the
+        # bounded attempt budget; known user/configuration errors fail above.
+        return True
 
     def _event_data(self, event: dict[str, str]) -> dict[str, Any]:
         raw = event.get("data") or "{}"
