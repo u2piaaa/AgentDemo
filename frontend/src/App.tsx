@@ -1,5 +1,6 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   AlertCircle,
   BookOpen,
   Bot,
@@ -15,12 +16,19 @@ import {
   LogIn,
   LogOut,
   Menu,
+  MessageSquare,
   MessageSquarePlus,
+  Moon,
   PauseCircle,
+  Search,
   Send,
   Settings2,
+  Sparkles,
+  Sun,
   Trash2,
+  User as UserIcon,
   UserPlus,
+  Wrench,
   X,
   XCircle
 } from "lucide-react";
@@ -103,7 +111,36 @@ function countLabel(count: number, label: string): string {
   return `${count} ${label}${count === 1 ? "" : "s"}`;
 }
 
+type Theme = "light" | "dark";
+type InspectorTab = "activity" | "context" | "tools";
+
+const QUICK_PROMPTS = [
+  {
+    title: "Plan the next milestone",
+    description: "Turn a broad goal into concrete, ordered work.",
+    prompt: "Review the current project context and propose the next high-impact milestone with an execution plan."
+  },
+  {
+    title: "Research with sources",
+    description: "Find current information and synthesize the evidence.",
+    prompt: "Research the latest practical patterns for reliable AI agents and summarize the findings with sources."
+  },
+  {
+    title: "Create a recurring check",
+    description: "Prepare a prompt that can run on a schedule.",
+    prompt: "Review project health, identify regressions or blocked work, and recommend the next actions."
+  }
+] as const;
+
+function initialTheme(): Theme {
+  if (typeof window === "undefined") return "light";
+  const stored = window.localStorage.getItem("agentdemo-theme");
+  if (stored === "light" || stored === "dark") return stored;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 export function App() {
+  const [theme, setTheme] = useState<Theme>(initialTheme);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<DraftMessage[]>([]);
@@ -148,13 +185,21 @@ export function App() {
   const [conversationToDelete, setConversationToDelete] = useState<Conversation | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  const [conversationQuery, setConversationQuery] = useState("");
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("activity");
   const [executionTraces, setExecutionTraces] = useState<Record<string, ExecutionTrace>>({});
   const [confirmationDecisions, setConfirmationDecisions] = useState<Record<string, ConfirmationDecision>>({});
   const executionTraceRef = useRef<Record<string, ExecutionTrace>>({});
   const pendingConfirmationConversationRef = useRef<string | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const taskStatusRef = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem("agentdemo-theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     getAuthStatus()
@@ -340,6 +385,14 @@ export function App() {
     () => conversations.find((item) => item.id === activeConversationId),
     [activeConversationId, conversations]
   );
+
+  const filteredConversations = useMemo(() => {
+    const query = conversationQuery.trim().toLocaleLowerCase();
+    if (!query) return conversations;
+    return conversations.filter((conversation) =>
+      conversation.title.toLocaleLowerCase().includes(query)
+    );
+  }, [conversationQuery, conversations]);
 
   const toolHistory = useMemo(() => {
     const fromMessages = messages.flatMap((message) => traceFromMessage(message)?.toolCalls ?? []);
@@ -846,6 +899,12 @@ export function App() {
     }
   }
 
+  function handleQuickPrompt(prompt: string, openSchedule = false) {
+    setInput(prompt);
+    setIsScheduleComposerOpen(openSchedule);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
   async function handleUploadDocument(file: File | undefined) {
     if (!file || isUploading) return;
     setIsUploading(true);
@@ -986,9 +1045,10 @@ export function App() {
     return (
       <main className="auth-screen">
         <div className="auth-panel">
-          <Bot size={32} aria-hidden="true" />
+          <div className="auth-brandmark"><Bot size={28} aria-hidden="true" /></div>
           <h1>Personal Agent</h1>
-          <p className="muted">Checking session...</p>
+          <p className="auth-lead">Preparing your private agent workspace.</p>
+          <p className="muted auth-loading"><Loader2 className="spin" size={15} aria-hidden="true" /> Checking session</p>
         </div>
       </main>
     );
@@ -998,9 +1058,10 @@ export function App() {
     return (
       <main className="auth-screen">
         <form className="auth-panel" onSubmit={handleAccessSubmit}>
-          <Bot size={32} aria-hidden="true" />
+          <div className="auth-brandmark"><Bot size={28} aria-hidden="true" /></div>
+          <p className="eyebrow">Private workspace</p>
           <h1>Personal Agent</h1>
-          <p className="muted">Enter the project access token.</p>
+          <p className="auth-lead">Enter the project token to continue to your local-first workspace.</p>
           <label htmlFor="access-token">Access token</label>
           <input
             id="access-token"
@@ -1023,8 +1084,10 @@ export function App() {
     return (
       <main className="auth-screen">
         <form className="auth-panel" onSubmit={handleAuthSubmit}>
-          <Bot size={32} aria-hidden="true" />
+          <div className="auth-brandmark"><Bot size={28} aria-hidden="true" /></div>
+          <p className="eyebrow">Local-first intelligence</p>
           <h1>Personal Agent</h1>
+          <p className="auth-lead">Plan, research, use tools, and keep work moving in one focused workspace.</p>
           <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
             <button
               className={authMode === "login" ? "auth-tab active" : "auth-tab"}
@@ -1081,12 +1144,13 @@ export function App() {
 
   return (
     <main className="app-shell">
+      <a className="skip-link" href="#chat-input">Skip to message composer</a>
       <aside className={isSidebarOpen ? "sidebar mobile-open" : "sidebar"} aria-label="Conversations">
         <div className="brand">
-          <Bot size={24} aria-hidden="true" />
+          <div className="brand-mark"><Bot size={22} aria-hidden="true" /></div>
           <div>
             <h1>Personal Agent</h1>
-            <p>{currentUser.username}</p>
+            <p>Intelligence workspace</p>
           </div>
           <button
             className="icon-button sidebar-close"
@@ -1098,21 +1162,35 @@ export function App() {
             <X size={18} aria-hidden="true" />
           </button>
         </div>
-        <button className="secondary-action" onClick={handleLogout}>
-          <LogOut size={18} aria-hidden="true" />
-          Logout
-        </button>
-        <button className="primary-action" onClick={handleNewConversation}>
+        <button className="primary-action new-chat-action" onClick={handleNewConversation}>
           <MessageSquarePlus size={18} aria-hidden="true" />
           New chat
         </button>
-        <nav className="conversation-list">
-          {conversations.map((conversation) => (
+        <div className="conversation-search">
+          <Search size={16} aria-hidden="true" />
+          <label className="sr-only" htmlFor="conversation-search">Search conversations</label>
+          <input
+            id="conversation-search"
+            type="search"
+            value={conversationQuery}
+            onChange={(event) => setConversationQuery(event.target.value)}
+            placeholder="Search conversations"
+          />
+        </div>
+        <div className="sidebar-section-heading">
+          <span>Recent</span>
+          <span>{filteredConversations.length}</span>
+        </div>
+        <nav className="conversation-list" aria-label="Recent conversations">
+          {filteredConversations.length === 0 ? (
+            <p className="sidebar-empty">{conversationQuery ? "No matching conversations." : "Start a new chat to build your workspace."}</p>
+          ) : filteredConversations.map((conversation) => (
             <div
               className={conversation.id === activeConversationId ? "conversation active" : "conversation"}
               key={conversation.id}
             >
               <button className="conversation-select" onClick={() => handleSelectConversation(conversation.id)}>
+                <MessageSquare size={16} aria-hidden="true" />
                 <span>{conversation.title}</span>
               </button>
               <button
@@ -1128,6 +1206,16 @@ export function App() {
             </div>
           ))}
         </nav>
+        <div className="sidebar-footer">
+          <div className="user-chip" title={`Signed in as ${currentUser.username}`}>
+            <UserIcon size={17} aria-hidden="true" />
+            <div><span>Signed in as</span><strong>{currentUser.username}</strong></div>
+          </div>
+          <button className="sidebar-logout" type="button" onClick={handleLogout}>
+            <LogOut size={17} aria-hidden="true" />
+            Log out
+          </button>
+        </div>
       </aside>
 
       <section className="workspace" aria-label="Chat workspace">
@@ -1145,7 +1233,7 @@ export function App() {
             <Menu size={20} aria-hidden="true" />
           </button>
           <div className="conversation-heading">
-            <p className="eyebrow">Conversation</p>
+            <p className="eyebrow">Workspace <span aria-hidden="true">/</span> Conversation</p>
             {isEditingTitle ? (
               <form className="title-editor" onSubmit={handleSaveTitle}>
                 <input
@@ -1190,6 +1278,15 @@ export function App() {
           </div>
           <div className="topbar-actions">
             <button
+              className="icon-button theme-toggle"
+              type="button"
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+              title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+              onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+            >
+              {theme === "dark" ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
+            </button>
+            <button
               className="icon-button mobile-inspector-button"
               type="button"
               aria-label="Open runtime details"
@@ -1201,7 +1298,7 @@ export function App() {
             >
               <Settings2 size={18} aria-hidden="true" />
             </button>
-            <div className="runtime-state" aria-live="polite">
+            <div className={isStreaming ? "runtime-state working" : "runtime-state"} aria-live="polite">
               {isStreaming ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <CircleDot size={16} />}
               {status}
             </div>
@@ -1213,14 +1310,33 @@ export function App() {
             <div className="message-list" ref={messageListRef}>
               {messages.length === 0 ? (
                 <div className="empty-state">
-                  <Bot size={32} aria-hidden="true" />
-                  <h3>Start with a task, question, or document workflow.</h3>
-                  <p>The first version is wired for streaming, local tool discovery, and RAG citations.</p>
+                  <div className="empty-state-mark"><Sparkles size={24} aria-hidden="true" /></div>
+                  <p className="eyebrow">Ready when you are</p>
+                  <h3>What should we move forward?</h3>
+                  <p>Ask a question, delegate a background task, or turn a useful prompt into a recurring workflow.</p>
+                  <div className="quick-prompts" aria-label="Suggested prompts">
+                    {QUICK_PROMPTS.map((item, index) => (
+                      <button
+                        className="quick-prompt"
+                        type="button"
+                        key={item.title}
+                        onClick={() => handleQuickPrompt(item.prompt, index === 2)}
+                      >
+                        <span>{item.title}</span>
+                        <small>{item.description}</small>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               ) : (
                 messages.map((message) => (
                   <article className={`message ${message.role}`} key={message.id}>
-                    <div className="message-role">{message.role}</div>
+                    <div className="message-header">
+                      <span className="message-avatar" aria-hidden="true">
+                        {message.role === "assistant" ? <Bot size={15} /> : <UserIcon size={15} />}
+                      </span>
+                      <div className="message-role">{message.role === "assistant" ? "Personal Agent" : "You"}</div>
+                    </div>
                     {message.role === "assistant" ? renderExecutionTrace(message) : null}
                     {message.content ? <p>{message.content}</p> : null}
                   </article>
@@ -1228,29 +1344,22 @@ export function App() {
               )}
             </div>
             <form className="composer" onSubmit={handleSubmit}>
-              <div className="upload-row">
-                <input
-                  ref={fileInputRef}
-                  id="document-upload"
-                  type="file"
-                  accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf"
-                  onChange={(event) => handleUploadDocument(event.target.files?.[0])}
+              <label className="sr-only" htmlFor="chat-input">Message</label>
+              <div className="composer-input-shell">
+                <textarea
+                  ref={textareaRef}
+                  id="chat-input"
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  onKeyDown={handleComposerKeyDown}
+                  placeholder="Ask the agent to plan, research, use tools, or build a workflow..."
+                  rows={3}
                 />
-                <label className="upload-button" htmlFor="document-upload">
-                  <FileUp size={18} aria-hidden="true" />
-                  {isUploading ? "Indexing..." : "Upload document"}
-                </label>
-                <span aria-live="polite">{uploadStatus}</span>
+                <div className="composer-hint" aria-hidden="true">
+                  <span>Enter to send · Shift + Enter for a new line</span>
+                  <span>{input.length}</span>
+                </div>
               </div>
-              <label htmlFor="chat-input">Message</label>
-              <textarea
-                id="chat-input"
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={handleComposerKeyDown}
-                placeholder="Ask the agent to plan, retrieve, call tools, or summarize."
-                rows={3}
-              />
               <ScheduleComposer
                 open={isScheduleComposerOpen}
                 disabled={isStreaming || !input.trim()}
@@ -1259,43 +1368,62 @@ export function App() {
                 onClose={() => setIsScheduleComposerOpen(false)}
                 onCreate={handleCreateSchedule}
               />
-              <div className="composer-actions">
-                <button
-                  className="background-task-button"
-                  type="button"
-                  aria-expanded={isScheduleComposerOpen}
-                  disabled={isStreaming || isCreatingTask || !input.trim()}
-                  onClick={() => setIsScheduleComposerOpen((current) => !current)}
-                >
-                  <CalendarClock size={18} aria-hidden="true" />
-                  Schedule
-                </button>
-                <button
-                  className="background-task-button"
-                  type="button"
-                  disabled={isStreaming || isCreatingTask || !input.trim()}
-                  onClick={() => void handleCreateBackgroundTask()}
-                >
-                  {isCreatingTask ? (
-                    <Loader2 className="spin" size={18} aria-hidden="true" />
-                  ) : (
-                    <ClipboardList size={18} aria-hidden="true" />
-                  )}
-                  {isCreatingTask ? "Queueing" : "Run in background"}
-                </button>
-                <button className="send-button" disabled={isStreaming || isCreatingTask || !input.trim()}>
-                  <Send size={18} aria-hidden="true" />
-                  Send
-                </button>
+              <div className="composer-toolbar">
+                <div className="upload-row">
+                  <input
+                    ref={fileInputRef}
+                    id="document-upload"
+                    type="file"
+                    accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf"
+                    onChange={(event) => handleUploadDocument(event.target.files?.[0])}
+                  />
+                  <label className="upload-button" htmlFor="document-upload" title="Attach a document">
+                    <FileUp size={18} aria-hidden="true" />
+                    {isUploading ? "Indexing..." : "Attach"}
+                  </label>
+                  <span aria-live="polite">{uploadStatus}</span>
+                </div>
+                <div className="composer-actions">
+                  <button
+                    className="background-task-button"
+                    type="button"
+                    aria-expanded={isScheduleComposerOpen}
+                    disabled={isStreaming || isCreatingTask || !input.trim()}
+                    onClick={() => setIsScheduleComposerOpen((current) => !current)}
+                  >
+                    <CalendarClock size={18} aria-hidden="true" />
+                    Schedule
+                  </button>
+                  <button
+                    className="background-task-button"
+                    type="button"
+                    disabled={isStreaming || isCreatingTask || !input.trim()}
+                    onClick={() => void handleCreateBackgroundTask()}
+                  >
+                    {isCreatingTask ? (
+                      <Loader2 className="spin" size={18} aria-hidden="true" />
+                    ) : (
+                      <ClipboardList size={18} aria-hidden="true" />
+                    )}
+                    {isCreatingTask ? "Queueing" : "Background"}
+                  </button>
+                  <button className="send-button" disabled={isStreaming || isCreatingTask || !input.trim()}>
+                    <Send size={18} aria-hidden="true" />
+                    Send
+                  </button>
+                </div>
               </div>
             </form>
           </section>
 
           <aside className={isInspectorOpen ? "inspector mobile-open" : "inspector"} aria-label="Runtime inspector">
-            <div className="inspector-mobile-header">
-              <h2>Runtime details</h2>
+            <div className="inspector-header">
+              <div>
+                <p className="eyebrow">Control center</p>
+                <h2>Agent runtime</h2>
+              </div>
               <button
-                className="icon-button"
+                className="icon-button inspector-close"
                 type="button"
                 aria-label="Close runtime details"
                 title="Close runtime details"
@@ -1304,7 +1432,41 @@ export function App() {
                 <X size={18} aria-hidden="true" />
               </button>
             </div>
-            <section>
+            <div className="inspector-overview" aria-label="Runtime summary">
+              <div><span>State</span><strong>{isStreaming ? "Working" : "Ready"}</strong></div>
+              <div><span>Tasks</span><strong>{tasks.length}</strong></div>
+              <div><span>Tools</span><strong>{tools.length}</strong></div>
+            </div>
+            <div className="inspector-tabs" role="tablist" aria-label="Runtime views">
+              <button
+                className={inspectorTab === "activity" ? "active" : ""}
+                type="button"
+                role="tab"
+                aria-selected={inspectorTab === "activity"}
+                onClick={() => setInspectorTab("activity")}
+              >
+                <Activity size={16} aria-hidden="true" /> Activity
+              </button>
+              <button
+                className={inspectorTab === "context" ? "active" : ""}
+                type="button"
+                role="tab"
+                aria-selected={inspectorTab === "context"}
+                onClick={() => setInspectorTab("context")}
+              >
+                <BookOpen size={16} aria-hidden="true" /> Context
+              </button>
+              <button
+                className={inspectorTab === "tools" ? "active" : ""}
+                type="button"
+                role="tab"
+                aria-selected={inspectorTab === "tools"}
+                onClick={() => setInspectorTab("tools")}
+              >
+                <Wrench size={16} aria-hidden="true" /> Tools
+              </button>
+            </div>
+            <section hidden={inspectorTab !== "activity"}>
               <div className="section-title">
                 <CalendarClock size={18} aria-hidden="true" />
                 <h3>Schedules</h3>
@@ -1318,7 +1480,7 @@ export function App() {
                 onRunNow={(schedule) => void handleRunScheduleNow(schedule)}
               />
             </section>
-            <section>
+            <section hidden={inspectorTab !== "activity"}>
               <div className="section-title">
                 <ClipboardList size={18} aria-hidden="true" />
                 <h3>Tasks</h3>
@@ -1331,7 +1493,7 @@ export function App() {
                 onCancel={(taskId) => void handleCancelTask(taskId)}
               />
             </section>
-            <section>
+            <section hidden={inspectorTab !== "context"}>
               <div className="section-title">
                 <FileUp size={18} aria-hidden="true" />
                 <h3>Documents</h3>
@@ -1351,7 +1513,7 @@ export function App() {
               </div>
             </section>
 
-            <section>
+            <section hidden={inspectorTab !== "tools"}>
               <div className="section-title">
                 <Settings2 size={18} aria-hidden="true" />
                 <h3>MCP</h3>
@@ -1405,7 +1567,7 @@ export function App() {
               </div>
             </section>
 
-            <section>
+            <section hidden={inspectorTab !== "tools"}>
               <div className="section-title">
                 <Hammer size={18} aria-hidden="true" />
                 <h3>Tools</h3>
@@ -1424,7 +1586,7 @@ export function App() {
               </div>
             </section>
 
-            <section>
+            <section hidden={inspectorTab !== "tools"}>
               <div className="section-title">
                 <Settings2 size={18} aria-hidden="true" />
                 <h3>Tool history</h3>
@@ -1453,7 +1615,7 @@ export function App() {
               </div>
             </section>
 
-            <section>
+            <section hidden={inspectorTab !== "context"}>
               <div className="section-title">
                 <BookOpen size={18} aria-hidden="true" />
                 <h3>Citations</h3>
@@ -1473,7 +1635,7 @@ export function App() {
               </div>
             </section>
 
-            <section>
+            <section hidden={inspectorTab !== "tools"}>
               <div className="section-title">
                 <Settings2 size={18} aria-hidden="true" />
                 <h3>Runtime</h3>
