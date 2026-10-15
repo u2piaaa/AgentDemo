@@ -28,7 +28,7 @@ Useful targeted suites:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_access_token_middleware.py tests/test_tool_routes.py tests/test_task_routes.py
 .\.venv\Scripts\python.exe -m pytest tests/test_plugin_registry.py tests/test_tool_executor.py tests/test_read_file_plugin.py
-.\.venv\Scripts\python.exe -m pytest tests/test_agent_runtime.py tests/test_model_gateway.py
+.\.venv\Scripts\python.exe -m pytest tests/test_agent_runtime.py tests/test_model_gateway.py tests/test_model_transport.py
 .\.venv\Scripts\python.exe -m pytest tests/test_rag.py tests/test_memory_routes.py
 .\.venv\Scripts\python.exe -m pytest tests/test_task_scheduler.py tests/test_agent_task_runner.py tests/test_task_routes.py tests/test_task_schedules.py tests/test_task_schedule_routes.py
 ```
@@ -94,8 +94,9 @@ Use the existing patterns:
 - Use fake sessions that implement only the async methods the unit under test
   needs.
 - Monkey-patch `_embed_or_empty()` in RAG tests to force vector or keyword paths.
-- Keep direct `ModelGateway` unit tests focused on routing and message assembly,
-  not network behavior.
+- Use HTTPX `MockTransport` and fragmented byte streams for gateway retry,
+  deadline, cancellation, SSE and embedding validation checks. These exercise
+  the real HTTP client path without provider credentials or network access.
 
 `tests/test_agent_runtime_live.py::test_agent_runtime_streams_live_reply` is the
 opt-in live test. Pytest excludes the `live` marker by default, including on
@@ -105,7 +106,8 @@ machines whose `.env` contains credentials. Run it explicitly when needed:
 .\.venv\Scripts\python.exe -m pytest -m live
 ```
 
-It still skips automatically when `DEEPSEEK_API_KEY` is empty.
+It still skips automatically when the configured provider requires a key and
+neither `LLM_API_KEY` nor the default DeepSeek compatibility key is available.
 
 ## Scenario-Based Agent Evaluations
 

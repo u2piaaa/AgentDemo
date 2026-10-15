@@ -294,7 +294,28 @@ The runtime uses OpenAI-compatible HTTP APIs:
 
 - Embeddings: `OPENAI_BASE_URL`, `OPENAI_API_KEY`,
   `OPENAI_EMBEDDING_MODEL`
-- Agent chat: `LLM_BASE_URL`, `DEEPSEEK_API_KEY`, `LLM_CHAT_MODEL`
+- Agent chat: `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_CHAT_MODEL`.
+  The default DeepSeek provider also accepts the existing `DEEPSEEK_API_KEY`.
+
+The gateway records the configured provider in trace metadata. For a compatible
+local model endpoint, explicitly set its provider label, URL/model, and
+`LLM_API_KEY_REQUIRED=false` if it does not use authentication. Other providers
+never inherit the DeepSeek key automatically.
+
+`LLM_REQUEST_TIMEOUT_SECONDS` is the total request deadline, including retries
+and backoff. Connections have a separate `LLM_CONNECT_TIMEOUT_SECONDS` bound.
+Transient network failures and HTTP 408/429/500/502/503/504 are retried at most
+`LLM_MAX_RETRIES` times, honoring bounded `Retry-After` delays. Once response
+text has been yielded, the gateway never replays a request. Broken, incomplete,
+or provider-error streams fail instead of being saved as complete answers.
+
+Generation is bounded by `LLM_MAX_OUTPUT_TOKENS`. Use
+`LLM_OUTPUT_TOKEN_PARAMETER` to select the token-limit field supported by your
+compatible provider. `LLM_REASONING_EFFORT` is optional and only sent when set;
+when present it replaces the default temperature setting. Configure a value
+supported by your chosen model. Token-limit exhaustion is reported as an error.
+Embedding requests use bounded batches, retain input order, and validate vector
+count, indices, finite values and configured dimensions before database writes.
 
 Default development settings are in `backend/.env.example`. Automated tests and
 offline agent evaluations use fakes and do not need real API keys. Paid live

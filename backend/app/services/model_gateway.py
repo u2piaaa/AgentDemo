@@ -1,10 +1,25 @@
+import asyncio
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+import json
+import math
+import random
 from typing import Any
 
 import httpx
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
+
+
+RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+MAX_SSE_EVENT_CHARS = 1_000_000
+
+
+class ModelResponseError(RuntimeError):
+    """A provider response cannot safely be treated as a complete model result."""
 
 
 @dataclass(frozen=True)
@@ -23,13 +38,17 @@ class StructuredToolPlan:
 
 
 class ModelGateway:
-    def __init__(self) -> None:
-        self.settings = get_settings()
+    def __init__(
+        self, settings: Settings | None = None, client: httpx.AsyncClient | None = None
+    ) -> None:
+        self.settings = settings or get_settings()
+        # An injected client belongs to the caller; request-local clients are closed here.
+        self._http_client = client
 
     def route(self, task_type: str, prompt: str) -> ModelRoute:
         return ModelRoute(
             model_name=self.settings.llm_chat_model,
-            provider="deepseek",
+            provider=self.settings.llm_provider,
             reason=f"agent_{task_type}_chat",
         )
 
@@ -81,42 +100,206 @@ class ModelGateway:
         history: list[dict[str, str]] | None = None,
     ) -> AsyncIterator[str]:
         messages = self._build_messages(prompt, context, history or [])
-        payload = {
+        payload: dict[str, Any] = {
             "model": model_name,
             "messages": messages,
             "stream": True,
-            "temperature": 0.3,
+            self.settings.llm_output_token_parameter: self.settings.llm_max_output_tokens,
         }
-        headers = self._auth_headers(self.settings.deepseek_api_key)
+        if self.settings.llm_reasoning_effort is not None:
+            payload["reasoning_effort"] = self.settings.llm_reasoning_effort
+        else:
+            payload["temperature"] = 0.3
+        api_key = self.settings.llm_api_key
+        if not api_key and self.settings.llm_provider == "deepseek":
+            api_key = self.settings.deepseek_api_key
+        headers = self._auth_headers(api_key, required=self.settings.llm_api_key_required)
+        headers["Accept"] = "text/event-stream"
         url = self._join_url(self.settings.llm_base_url, "/chat/completions")
-
-        async with httpx.AsyncClient(timeout=self.settings.llm_request_timeout_seconds) as client:
-            async with client.stream("POST", url, json=payload, headers=headers) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = line.removeprefix("data:").strip()
-                    if data == "[DONE]":
-                        break
-                    token = self._extract_stream_token(data)
-                    if token:
-                        yield token
+        emitted = False
+        try:
+            # HTTPX's read timeout bounds network inactivity, not total generation time.
+            # This deadline includes connection setup, all retries, and backoff.
+            async with asyncio.timeout(self.settings.llm_request_timeout_seconds):
+                async with self._client() as client:
+                    for attempt in range(self.settings.llm_max_retries + 1):
+                        try:
+                            async with client.stream(
+                                "POST", url, json=payload, headers=headers, timeout=self._timeout()
+                            ) as response:
+                                response.raise_for_status()
+                                async for data in self._sse_data(response):
+                                    if data == "[DONE]":
+                                        return
+                                    chunk = self._parse_object(data)
+                                    token, finished = self._stream_delta(chunk)
+                                    if token:
+                                        emitted = True
+                                        yield token
+                                    if finished:
+                                        return
+                                raise ModelResponseError(
+                                    "Model stream ended before a completion marker"
+                                )
+                        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                            # Replaying after even one emitted token duplicates partial answers.
+                            if emitted or not self._should_retry(exc, attempt):
+                                raise
+                            await asyncio.sleep(self._retry_delay(exc, attempt))
+        except TimeoutError as exc:
+            raise TimeoutError("Model request exceeded its total time budget") from exc
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        payload = {
-            "model": self.settings.openai_embedding_model,
-            "input": texts,
-        }
         headers = self._auth_headers(self.settings.openai_api_key)
         url = self._join_url(self.settings.openai_base_url, "/embeddings")
-        async with httpx.AsyncClient(timeout=self.settings.llm_request_timeout_seconds) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()["data"]
-        return [item["embedding"] for item in sorted(data, key=lambda item: item["index"])]
+        embeddings: list[list[float]] = []
+        try:
+            async with asyncio.timeout(self.settings.llm_request_timeout_seconds):
+                async with self._client() as client:
+                    for start in range(0, len(texts), self.settings.embedding_batch_size):
+                        batch = texts[start : start + self.settings.embedding_batch_size]
+                        data = await self._post_json(
+                            client, url,
+                            {"model": self.settings.openai_embedding_model, "input": batch},
+                            headers,
+                        )
+                        embeddings.extend(self._validate_embeddings(data, len(batch)))
+        except TimeoutError as exc:
+            raise TimeoutError("Embedding request exceeded its total time budget") from exc
+        return embeddings
+
+    @asynccontextmanager
+    async def _client(self) -> AsyncIterator[httpx.AsyncClient]:
+        if self._http_client is not None:
+            yield self._http_client
+        else:
+            async with httpx.AsyncClient(timeout=self._timeout()) as client:
+                yield client
+
+    def _timeout(self) -> httpx.Timeout:
+        return httpx.Timeout(
+            self.settings.llm_request_timeout_seconds,
+            connect=min(
+                self.settings.llm_connect_timeout_seconds,
+                self.settings.llm_request_timeout_seconds,
+            ),
+        )
+
+    def _should_retry(self, exc: Exception, attempt: int) -> bool:
+        if attempt >= self.settings.llm_max_retries:
+            return False
+        if isinstance(exc, httpx.HTTPStatusError):
+            return exc.response.status_code in RETRYABLE_STATUS_CODES
+        return isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError))
+
+    def _retry_delay(self, exc: Exception, attempt: int) -> float:
+        delay = self.settings.llm_retry_base_seconds * (2 ** attempt) * random.uniform(0.5, 1.0)
+        if isinstance(exc, httpx.HTTPStatusError):
+            value = exc.response.headers.get("Retry-After", "")
+            try:
+                retry_after = float(value)
+            except ValueError:
+                try:
+                    retry_after = (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds()
+                except (ValueError, TypeError, OverflowError):
+                    retry_after = delay
+            if math.isfinite(retry_after):
+                delay = max(delay, retry_after)
+        return max(0.0, min(delay, self.settings.llm_retry_max_seconds))
+
+    async def _post_json(
+        self, client: httpx.AsyncClient, url: str, payload: dict, headers: dict[str, str]
+    ) -> dict[str, Any]:
+        for attempt in range(self.settings.llm_max_retries + 1):
+            try:
+                response = await client.post(
+                    url, json=payload, headers=headers, timeout=self._timeout()
+                )
+                response.raise_for_status()
+                return self._parse_object(response.text)
+            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                if not self._should_retry(exc, attempt):
+                    raise
+                await asyncio.sleep(self._retry_delay(exc, attempt))
+        raise AssertionError("Retry loop exhausted without a result or exception")
+
+    async def _sse_data(self, response: httpx.Response) -> AsyncIterator[str]:
+        parts: list[str] = []
+        size = 0
+        async for line in response.aiter_lines():
+            if not line:
+                if parts:
+                    yield "\n".join(parts)
+                    parts = []
+                    size = 0
+            elif line.startswith("data:") or line == "data":
+                value = line.partition(":")[2].removeprefix(" ")
+                size += len(value) + 1
+                if size > MAX_SSE_EVENT_CHARS:
+                    raise ModelResponseError("Model stream event exceeds the size limit")
+                parts.append(value)
+        # SSE requires a blank line to dispatch. Do not accept a truncated final event.
+
+    def _parse_object(self, data: str) -> dict[str, Any]:
+        try:
+            parsed = json.loads(data)
+        except (ValueError, TypeError) as exc:
+            raise ModelResponseError("Model provider returned invalid JSON") from exc
+        if not isinstance(parsed, dict):
+            raise ModelResponseError("Model provider returned an invalid response object")
+        if parsed.get("error") is not None:
+            # Never expose the provider's raw body: it can contain credentials or tool markup.
+            raise ModelResponseError("Model provider returned an error response")
+        return parsed
+
+    def _stream_delta(self, chunk: dict[str, Any]) -> tuple[str, bool]:
+        choices = chunk.get("choices")
+        if choices == []:  # Usage-only events do not contain text.
+            return "", False
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise ModelResponseError("Model provider returned invalid stream choices")
+        choice = choices[0]
+        delta = choice.get("delta") or {}
+        if not isinstance(delta, dict):
+            raise ModelResponseError("Model provider returned an invalid stream delta")
+        content = delta.get("content")
+        if content is not None and not isinstance(content, str):
+            raise ModelResponseError("Model provider returned non-text response content")
+        finish_reason = choice.get("finish_reason")
+        if finish_reason is not None and finish_reason != "stop":
+            if finish_reason == "length":
+                raise ModelResponseError("Model output reached its token limit before completion")
+            raise ModelResponseError("Model provider did not complete the requested text response")
+        # Reasoning and structured tool protocol are not assistant answer text.
+        return content or "", finish_reason is not None
+
+    def _validate_embeddings(self, data: dict[str, Any], count: int) -> list[list[float]]:
+        rows = data.get("data")
+        if not isinstance(rows, list) or len(rows) != count:
+            raise ModelResponseError("Embedding response has an unexpected number of vectors")
+        indexed: dict[int, list[float]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ModelResponseError("Embedding response contains an invalid vector row")
+            index, vector = row.get("index"), row.get("embedding")
+            if type(index) is not int or not 0 <= index < count or index in indexed:
+                raise ModelResponseError("Embedding response contains invalid or duplicate indices")
+            if not isinstance(vector, list) or len(vector) != self.settings.embedding_dimensions:
+                raise ModelResponseError("Embedding dimensions do not match the configured storage")
+            try:
+                valid_values = all(
+                    type(value) in (int, float) and math.isfinite(value) for value in vector
+                )
+            except OverflowError:
+                valid_values = False
+            if not valid_values:
+                raise ModelResponseError("Embedding response contains non-finite or non-numeric values")
+            if not any(vector):
+                raise ModelResponseError("Embedding response contains a zero vector")
+            indexed[index] = vector
+        return [indexed[index] for index in range(count)]
 
     async def summarize_messages(
         self,
@@ -187,21 +370,16 @@ class ModelGateway:
             {"role": "user", "content": user_content},
         ]
 
-    def _auth_headers(self, api_key: str) -> dict[str, str]:
-        if not api_key:
+    def _auth_headers(self, api_key: str, *, required: bool = True) -> dict[str, str]:
+        if not api_key and required:
             raise RuntimeError("Missing API key for model provider")
-        return {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers
 
     def _join_url(self, base_url: str, path: str) -> str:
         return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
     def _extract_stream_token(self, data: str) -> str:
-        parsed: dict[str, Any] = httpx.Response(200, content=data).json()
-        choices = parsed.get("choices") or []
-        if not choices:
-            return ""
-        delta = choices[0].get("delta") or {}
-        return delta.get("content") or ""
+        return self._stream_delta(self._parse_object(data))[0]

@@ -43,8 +43,12 @@ class FakeSession:
 @pytest.mark.asyncio
 @pytest.mark.live
 async def test_agent_runtime_streams_live_reply() -> None:
-    if not get_settings().deepseek_api_key:
-        pytest.skip("DeepSeek API key is not configured")
+    settings = get_settings()
+    has_key = settings.llm_api_key or (
+        settings.llm_provider == "deepseek" and settings.deepseek_api_key
+    )
+    if settings.llm_api_key_required and not has_key:
+        pytest.skip("Chat model API key is not configured")
     runtime = AgentRuntime(session=FakeSession(), plugin_registry=None)  # type: ignore[arg-type]
 
     events = []

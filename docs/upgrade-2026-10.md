@@ -20,8 +20,8 @@ and audit boundary remain compatibility requirements.
 
 | # | Module | Upgrade focus | Acceptance | State |
 | --- | --- | --- | --- | --- |
-| 1 | Dependencies and quality gates | Current stable backend packages, reproducible lockfile, Python compatibility matrix, dependency audits, baseline vulnerability fix | Clean locked install; full backend tests, coverage, evaluations and lint; frontend tests/build/audit | In progress |
-| 2 | Model gateway | Provider-neutral configuration, bounded retries/timeouts, robust streaming and embedding validation | Deterministic transport fault tests; no duplicated streamed tokens; existing model/runtime tests | Planned |
+| 1 | Dependencies and quality gates | Current stable backend packages, reproducible lockfile, Python compatibility matrix, dependency audits, baseline vulnerability fix | Clean locked install; full backend tests, coverage, evaluations and lint; frontend tests/build/audit | Released: `8895a7a` |
+| 2 | Model gateway | Provider-neutral configuration, bounded retries/timeouts, robust streaming and embedding validation | Deterministic transport fault tests; no duplicated streamed tokens; existing model/runtime tests | In progress |
 | 3 | Agent runtime and conversations | Explicit execution/context budgets, cancellation and reliable continuation while preserving graph/SSE semantics | Runtime/route regression tests, protocol sanitization, real confirmation flow | Planned |
 | 4 | Tools, search and MCP | Current stable MCP protocol capabilities, accurate connection/error state, bounded discovery and execution | MCP/security/executor/search suites; real tool confirmation and history | Planned |
 | 5 | RAG and memory | Hybrid ranking and bounded context with reliable source attribution and scoped retrieval | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Planned |
@@ -67,5 +67,47 @@ Local acceptance on Python 3.12.8 / Windows:
 - Existing Windows pytest temporary-directory cleanup warnings remain;
   they do not represent failing application tests.
 
-Remote matrix verification and release are pending the first push. Runtime
+[GitHub quality run 38695466419](https://github.com/u2piaaa/AgentDemo/actions/runs/38695466419)
+passed all three Python versions and frontend checks. Commit `8895a7a` was
+fast-forwarded from `test` into `run` and both branches were pushed. Runtime
 model/provider calls remain excluded from this foundation acceptance.
+
+## Iteration 2 — model gateway
+
+Official references checked on 2026-10-15:
+
+- [HTTPX timeouts](https://www.python-httpx.org/advanced/timeouts/) distinguish
+  network inactivity from an operation deadline. The gateway now has both.
+- [DeepSeek chat API](https://api-docs.deepseek.com/api/create-chat-completion/)
+  defines streamed completion markers, token limits and reasoning effort.
+- [DeepSeek errors](https://api-docs.deepseek.com/quick_start/error_codes/) inform
+  the distinction between transient and permanent provider failures.
+- [SSE parsing standard](https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream)
+  defines multiline data fields, comments and blank-line event dispatch.
+
+Implemented: configurable provider labels/credentials with legacy DeepSeek
+fallback; explicit opt-in for keyless local endpoints; configurable output and
+reasoning budgets; bounded transient retries with jitter and Retry-After;
+total operation deadlines; cancellation propagation; no replay after emitted
+text; strict SSE completion/error handling; bounded, ordered, validated
+embedding batches. Existing runtime and tool-execution contracts are unchanged.
+
+Acceptance:
+
+- 53 new transport fault/validation cases; full backend suite: 268 passed,
+  1 live test deselected. Coverage: 82.56%; gateway coverage: 88%.
+- Ruff, lockfile check and 12/12 offline Agent evaluations: passed.
+- Real browser against the upgraded test worktree on ports 8001/5174 and an
+  isolated PostgreSQL database: registration, chat, final answer persistence,
+  immediate MCP confirmation, confirmed execution and tool history passed.
+- A local HTTP model fixture intentionally returned 503 on its first chat
+  request, then 200; the browser received one complete answer. This checks the
+  actual transport path but does not certify a commercial provider's live API.
+- Screenshot: ignored `.local/model-gateway-browser.jpg` in the test worktree.
+
+Browser testing also reproduced an existing runtime defect: a blocked tool
+confirmation disappears after a page reload because the blocked graph path
+does not persist an assistant trace. Fix this first in iteration 3, including
+refresh/replay regression checks. It is not a model transport regression.
+
+Remote matrix verification and release are pending this iteration's push.

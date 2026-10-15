@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,12 +21,23 @@ class Settings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
     openai_chat_model: str = "gpt-5.4-mini"
     deepseek_api_key: str = ""
+    llm_provider: str = Field(default="deepseek", min_length=1)
+    llm_api_key: str = ""
+    llm_api_key_required: bool = True
     llm_base_url: str = "https://api.deepseek.com"
     llm_chat_model: str = "deepseek-v4-pro"
     tool_timeout_seconds: int = 30
     max_tool_output_chars: int = 8000
-    llm_request_timeout_seconds: int = 120
-    embedding_dimensions: int = 1536
+    llm_request_timeout_seconds: float = Field(default=120, gt=0, le=3600)
+    llm_connect_timeout_seconds: float = Field(default=10, gt=0, le=120)
+    llm_max_retries: int = Field(default=2, ge=0, le=5)
+    llm_retry_base_seconds: float = Field(default=0.5, ge=0, le=30)
+    llm_retry_max_seconds: float = Field(default=8, ge=0, le=60)
+    llm_max_output_tokens: int = Field(default=4096, ge=1, le=131072)
+    llm_output_token_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
+    llm_reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None = None
+    embedding_dimensions: int = Field(default=1536, ge=1, le=65536)
+    embedding_batch_size: int = Field(default=64, ge=1, le=2048)
     agent_memory_message_limit: int = 12
     agent_task_max_concurrency: int = 2
     agent_task_default_max_attempts: int = 3
