@@ -23,7 +23,7 @@ and audit boundary remain compatibility requirements.
 | 1 | Dependencies and quality gates | Current stable backend packages, reproducible lockfile, Python compatibility matrix, dependency audits, baseline vulnerability fix | Clean locked install; full backend tests, coverage, evaluations and lint; frontend tests/build/audit | Released: `8895a7a` |
 | 2 | Model gateway | Provider-neutral configuration, bounded retries/timeouts, robust streaming and embedding validation | Deterministic transport fault tests; no duplicated streamed tokens; existing model/runtime tests | Released: `4535e3c` |
 | 3 | Agent runtime and conversations | Explicit execution/context budgets, cancellation and reliable continuation while preserving graph/SSE semantics | Runtime/route regression tests, protocol sanitization, real confirmation flow | Released: `eaabd47` |
-| 4 | Tools, search and MCP | Current stable MCP protocol capabilities, accurate connection/error state, bounded discovery and execution | MCP/security/executor/search suites; real tool confirmation and history | Acceptance in progress |
+| 4 | Tools, search and MCP | Current stable MCP protocol capabilities, accurate connection/error state, bounded discovery and execution | MCP/security/executor/search suites; real tool confirmation and history | Released: `48ba514` |
 | 5 | RAG and memory | Hybrid ranking and bounded context with reliable source attribution and scoped retrieval | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Planned |
 | 6 | Background tasks and schedules | Deadline/recovery/cancellation correctness and inspectable execution budgets | Worker/scheduler/timezone/concurrency tests; real scheduled task flow | Planned |
 | 7 | Authentication and API operations | Current password hashing with legacy migration, bounded operational checks and safe defaults | Real PostgreSQL register/login writes; ownership/auth/health tests | Planned |
@@ -226,6 +226,16 @@ read-only policy, the new process negotiated `2026-07-28` and read this public
 repository's README through `ToolExecutor`, returning validated structured
 content. The check used the existing GitHub CLI authentication in process memory;
 no credentials or downloaded binaries were added to Git.
+
+Implementation `48ba514` and compatibility notes `f289fac` were fast-forwarded
+from `test` to `run` and both branches were pushed. The stable checkout's backend
+now has SDK 2.3.0; Fetch uses its own locked SDK 1.30.0 environment. `uv pip check`
+passes for both. Ignored local MCP configs point to the new Fetch interpreter
+and GitHub 2.0.2 binary, with prior configs backed up under `.local/backups`.
+Existing service arguments and credential mappings were preserved.
+
+Acceptance still serves the isolated database and fixtures on ports 8001/5174;
+the normal 8000/5173 services remain stopped until the final combined release.
 
 ## Next iteration handoff
 
