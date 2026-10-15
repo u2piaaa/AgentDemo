@@ -21,7 +21,7 @@ and audit boundary remain compatibility requirements.
 | # | Module | Upgrade focus | Acceptance | State |
 | --- | --- | --- | --- | --- |
 | 1 | Dependencies and quality gates | Current stable backend packages, reproducible lockfile, Python compatibility matrix, dependency audits, baseline vulnerability fix | Clean locked install; full backend tests, coverage, evaluations and lint; frontend tests/build/audit | Released: `8895a7a` |
-| 2 | Model gateway | Provider-neutral configuration, bounded retries/timeouts, robust streaming and embedding validation | Deterministic transport fault tests; no duplicated streamed tokens; existing model/runtime tests | In progress |
+| 2 | Model gateway | Provider-neutral configuration, bounded retries/timeouts, robust streaming and embedding validation | Deterministic transport fault tests; no duplicated streamed tokens; existing model/runtime tests | Released: `4535e3c` |
 | 3 | Agent runtime and conversations | Explicit execution/context budgets, cancellation and reliable continuation while preserving graph/SSE semantics | Runtime/route regression tests, protocol sanitization, real confirmation flow | Planned |
 | 4 | Tools, search and MCP | Current stable MCP protocol capabilities, accurate connection/error state, bounded discovery and execution | MCP/security/executor/search suites; real tool confirmation and history | Planned |
 | 5 | RAG and memory | Hybrid ranking and bounded context with reliable source attribution and scoped retrieval | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Planned |
@@ -110,4 +110,21 @@ confirmation disappears after a page reload because the blocked graph path
 does not persist an assistant trace. Fix this first in iteration 3, including
 refresh/replay regression checks. It is not a model transport regression.
 
-Remote matrix verification and release are pending this iteration's push.
+[GitHub quality run 38697039472](https://github.com/u2piaaa/AgentDemo/actions/runs/38697039472)
+passed all Python versions and frontend checks. Commit `4535e3c` was
+fast-forwarded into `run` and both release branches were pushed.
+
+## Next iteration handoff
+
+Iteration 3 starts from the verified `4535e3c` implementation baseline. Reproduce
+the lost-confirmation issue by requesting a direct URL, waiting for Confirm,
+then reloading. The current blocked path in `agent/graph.py` skips
+`save_assistant_message`; the frontend only retains the draft in memory.
+Persist approval state, resolve it durably after a decision, and prevent stale
+or duplicate approvals from repeating side effects. Preserve all executor
+checks and avoid introducing checkpoint replay of already-executed tools.
+
+The isolated acceptance database is `agent_upgrade_20261015`. Local HTTP model
+and MCP fixtures live under ignored `.local` in the test worktree. The browser
+test account and fixture replies belong only to that database. Do not copy
+fixture settings or synthetic model answers into the user's normal database.
