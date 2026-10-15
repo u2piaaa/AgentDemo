@@ -26,7 +26,7 @@ and audit boundary remain compatibility requirements.
 | 4 | Tools, search and MCP | Current stable MCP protocol capabilities, accurate connection/error state, bounded discovery and execution | MCP/security/executor/search suites; real tool confirmation and history | Released: `48ba514` |
 | 5 | RAG and memory | Context-enriched chunks, hybrid RRF, diversity selection and current listwise reranker integration; reliable incremental memory | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Released: `4964e5c` |
 | 6 | Background tasks and schedules | Fenced workers, replay barriers, deadlines, bounded queues, non-overlapping schedules and DST policy | 389 backend tests; real PostgreSQL competition/recovery; desktop/mobile task and schedule flow | Released: `336f760` |
-| 7 | Authentication and API operations | Argon2id migration, expiring/revocable sessions, shared admission limits, resilient login and bounded readiness | 416 backend tests; PostgreSQL concurrency/migrations; real browser registration, logout, expiry and outage recovery | Validated locally; release checks pending |
+| 7 | Authentication and API operations | Argon2id migration, expiring/revocable sessions, shared admission limits, resilient login and bounded readiness | 416 backend tests; PostgreSQL concurrency/migrations; real browser registration, logout, expiry and outage recovery | Released: `3d42d8c` |
 | 8 | Frontend workspace | Claude-inspired warm neutral visual system, simpler sidebar/composer and dialogue typography; current React/Vite, resilient streaming and accessible responsive task/runtime controls | Unit tests/build/audit; desktop/mobile browser chat, tools and inspector | Planned |
 | 9 | Integration and release | Reconcile docs/config/migrations and validate the combined app | Full quality gates, migrations, browser acceptance, both remote branches and live process verification | Planned |
 
@@ -351,3 +351,9 @@ Local acceptance on 2026-10-15:
   restored the same account, conversation and documents without another login.
 - Acceptance remains isolated on ports 8001/5174 with synthetic credentials and
   labelled model fixtures. Normal stable ports remain idle until iteration 9.
+
+[Implementation CI 38721034143](https://github.com/u2piaaa/AgentDemo/actions/runs/38721034143)
+passed Python 3.11/3.12/3.14, PostgreSQL migration/integration tests, frontend
+checks and dependency audits. Concurrent admission now uses PostgreSQL time
+after CI exposed an elapsed-time race in an earlier application-clock version.
+Implementation `3d42d8c` is released through `test` to `run` with this ledger.
