@@ -22,7 +22,7 @@ and audit boundary remain compatibility requirements.
 | --- | --- | --- | --- | --- |
 | 1 | Dependencies and quality gates | Current stable backend packages, reproducible lockfile, Python compatibility matrix, dependency audits, baseline vulnerability fix | Clean locked install; full backend tests, coverage, evaluations and lint; frontend tests/build/audit | Released: `8895a7a` |
 | 2 | Model gateway | Provider-neutral configuration, bounded retries/timeouts, robust streaming and embedding validation | Deterministic transport fault tests; no duplicated streamed tokens; existing model/runtime tests | Released: `4535e3c` |
-| 3 | Agent runtime and conversations | Explicit execution/context budgets, cancellation and reliable continuation while preserving graph/SSE semantics | Runtime/route regression tests, protocol sanitization, real confirmation flow | Verified locally; release in progress |
+| 3 | Agent runtime and conversations | Explicit execution/context budgets, cancellation and reliable continuation while preserving graph/SSE semantics | Runtime/route regression tests, protocol sanitization, real confirmation flow | Released: `eaabd47` |
 | 4 | Tools, search and MCP | Current stable MCP protocol capabilities, accurate connection/error state, bounded discovery and execution | MCP/security/executor/search suites; real tool confirmation and history | Planned |
 | 5 | RAG and memory | Hybrid ranking and bounded context with reliable source attribution and scoped retrieval | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Planned |
 | 6 | Background tasks and schedules | Deadline/recovery/cancellation correctness and inspectable execution budgets | Worker/scheduler/timezone/concurrency tests; real scheduled task flow | Planned |
@@ -161,6 +161,11 @@ Acceptance:
 - Mobile 390 × 844: input/actions fit; Runtime opens as a usable bottom sheet.
   Ignored screenshots: `.local/runtime-mobile-composer.jpg` and
   `.local/runtime-mobile-inspector.jpg` in the test worktree.
+
+[GitHub quality run 38700625779](https://github.com/u2piaaa/AgentDemo/actions/runs/38700625779)
+passed Python 3.11/3.12/3.14 (including PostgreSQL migrations and approval races),
+frontend tests/build and both dependency audits. Commit `eaabd47` was
+fast-forwarded into `run` and both release branches were pushed.
 
 ## Next iteration handoff
 
