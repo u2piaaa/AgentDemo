@@ -67,6 +67,23 @@ async def delete_memory_summary(
     summary = await _get_owned_memory_summary(session, summary_id, current_user.id)
     if summary is None:
         raise HTTPException(status_code=404, detail="Memory summary not found")
+    # Lock in the same order as compaction (conversation, then summary). A
+    # legacy summary has no cursor: persist a forget boundary before deleting it.
+    conversation = (
+        await session.execute(
+            select(Conversation)
+            .where(
+                Conversation.id == summary.conversation_id, Conversation.user_id == current_user.id
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if conversation is not None and not (conversation.metadata_ or {}).get("memory_cursor"):
+        conversation.metadata_ = {
+            **(conversation.metadata_ or {}),
+            "memory_cursor": {"after_time": datetime.now(UTC).isoformat()},
+        }
     await session.delete(summary)
     await session.commit()
 

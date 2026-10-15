@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -73,6 +74,15 @@ class FakeRag:
 
 def test_runtime_preserves_exception_type_when_message_is_empty() -> None:
     assert AgentRuntime._exception_message(TimeoutError()) == "TimeoutError"
+
+
+def test_answer_context_keeps_contextual_chunk_lineage():
+    runtime = AgentRuntime(session=FakeSession(), plugin_registry=None, model_gateway=FakeGateway(), rag_service=FakeRag())
+    formatted = runtime._format_citation_context({"title": "Operations.md", "chunk_index": 4,
+        "content": "Restart the worker.", "metadata": {"retrieval_context": "Orion > Regional failover"}}, 1)
+    assert "Section context: Orion > Regional failover" in formatted
+    assert "Chunk: 5" in formatted
+    assert "Content:\nRestart the worker." in formatted
 
 
 class FakeGateway:
@@ -1692,19 +1702,26 @@ class SummarySession(FakeSession):
         super().__init__(history=[])
         self.messages = messages
         self.summaries = summaries or []
+        self.conversation = Conversation(id=messages[0].conversation_id, metadata_={})
+
+    async def scalar(self, statement):
+        return None
 
     async def execute(self, statement):
         text = str(statement)
         if "memory_summaries" in text:
             return ScalarResult(self.summaries)
-        return ScalarResult(self.messages)
+        if "FROM conversations" in text:
+            return ScalarResult([self.conversation])
+        return ScalarResult(self.messages[:1])
 
 
 @pytest.mark.asyncio
 async def test_runtime_generates_memory_summary_for_long_conversation() -> None:
     conversation_id = uuid4()
     messages = [
-        Message(conversation_id=conversation_id, role="user", content=f"fact {index}")
+        Message(id=uuid4(), conversation_id=conversation_id, role="user", content=f"fact {index}",
+                created_at=datetime.now(UTC) + timedelta(seconds=index))
         for index in range(4)
     ]
     session = SummarySession(messages)
@@ -1715,13 +1732,14 @@ async def test_runtime_generates_memory_summary_for_long_conversation() -> None:
         model_gateway=gateway,  # type: ignore[arg-type]
         rag_service=FakeRag(),  # type: ignore[arg-type]
     )
-    runtime.settings.agent_memory_message_limit = 3
+    runtime.settings = runtime.settings.model_copy(update={"agent_memory_message_limit": 3})
 
     await runtime._maybe_update_memory_summary(conversation_id)
 
     summaries = [item for item in session.items if isinstance(item, MemorySummary)]
     assert summaries[0].summary == "The user prefers concise project notes."
     assert gateway.summary_calls[0]["messages"][0]["content"] == "fact 0"
+    assert session.conversation.metadata_["memory_cursor"]["message_count"] == 1
 
 
 class LoopingRuntime(AgentRuntime):

@@ -12,6 +12,7 @@ from app.models.conversation import Conversation
 from app.models.knowledge import KnowledgeDocument
 from app.schemas import KnowledgeDocumentCreate, KnowledgeDocumentRead, McpResourceImportRequest
 from app.services.rag import RagService
+from app.mcp.resources import extract_mcp_resource_text
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
@@ -22,7 +23,11 @@ async def list_documents(
     conversation_id: UUID | None = None,
     session: AsyncSession = Depends(get_session),
 ) -> list[KnowledgeDocument]:
-    statement = select(KnowledgeDocument).order_by(KnowledgeDocument.created_at.desc())
+    statement = (
+        select(KnowledgeDocument)
+        .where(KnowledgeDocument.user_id == current_user.id)
+        .order_by(KnowledgeDocument.created_at.desc())
+    )
     if conversation_id is None:
         return []
     else:
@@ -42,6 +47,20 @@ async def create_document(
         await require_owned_conversation(session, payload.conversation_id, current_user.id)
     service = RagService(session, user_id=current_user.id)
     return await service.index_text(payload.model_copy(update={"user_id": current_user.id}))
+
+
+@router.post("/documents/{document_id}/reindex", response_model=KnowledgeDocumentRead)
+async def reindex_document(
+    document_id: UUID, current_user: CurrentUser, session: AsyncSession = Depends(get_session)
+) -> KnowledgeDocumentRead:
+    try:
+        document = await RagService(session, user_id=current_user.id).reindex_document(document_id)
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return document
 
 
 @router.post("/mcp-resource", response_model=KnowledgeDocumentRead)
@@ -66,31 +85,6 @@ async def import_mcp_resource(
         content=content,
     )
     return await RagService(session, user_id=current_user.id).index_text(document)
-
-
-def extract_mcp_resource_text(resource: dict) -> str:
-    """Normalize inline and standard MCP resources/read content blocks to text."""
-
-    collected: list[str] = []
-
-    def collect(value) -> None:
-        if isinstance(value, str):
-            text = value.strip()
-            if text and text not in collected:
-                collected.append(text)
-            return
-        if isinstance(value, list):
-            for item in value:
-                collect(item)
-            return
-        if isinstance(value, dict):
-            for key in ("text", "content"):
-                collect(value.get(key))
-
-    collect(resource.get("text"))
-    collect(resource.get("content"))
-    collect(resource.get("contents"))
-    return "\n\n".join(collected)
 
 
 @router.post("/documents/upload", response_model=KnowledgeDocumentRead)

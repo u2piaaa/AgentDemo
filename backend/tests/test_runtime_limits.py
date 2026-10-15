@@ -50,6 +50,8 @@ async def test_retrieval_timeout_falls_back_to_chat_and_reports_status():
     runtime = runtime_with(rag=rag)
     runtime.settings = runtime.settings.model_copy(update={"agent_retrieval_timeout_seconds": 0.01})
     runtime.session.rollback = AsyncMock()
+    # Isolate retrieval recovery from memory compaction's separate transaction.
+    runtime._maybe_update_memory_summary = AsyncMock()
     events = await asyncio.wait_for(collect_events(runtime, "hello"), timeout=2)
     assert stopped.is_set()
     assert any(name == "status" and data["label"] == "retrieval_timeout" for name, data in events)
@@ -60,7 +62,8 @@ async def test_retrieval_timeout_falls_back_to_chat_and_reports_status():
 async def test_graph_deadline_terminates_waiting_provider_and_does_not_save_partial_answer():
     gateway = WaitingGateway()
     runtime = runtime_with(gateway)
-    runtime.settings = runtime.settings.model_copy(update={"agent_run_timeout_seconds": 0.05})
+    # Allow graph setup under coverage/loaded CI before testing provider cancellation.
+    runtime.settings = runtime.settings.model_copy(update={"agent_run_timeout_seconds": 0.5})
     events = await asyncio.wait_for(collect_events(runtime, "hello"), timeout=2)
     assert gateway.closed.is_set()
     assert events[-1][0] == "error"

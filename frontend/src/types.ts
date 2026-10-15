@@ -46,6 +46,7 @@ export type KnowledgeDocument = {
   title: string;
   source_type: string;
   status: string;
+  retrieval_mode?: string;
   created_at: string;
 };
 
@@ -56,6 +57,15 @@ export type Citation = {
   content: string;
   source_type?: string;
   source_uri?: string | null;
+  retrieval_method?: string;
+  metadata?: {
+    start_char?: number;
+    end_char?: number;
+    retrieval_context?: string;
+    selection_method?: string;
+    reranker?: string;
+    rerank_status?: string;
+  };
 };
 
 export type McpServer = {

@@ -66,6 +66,7 @@ import {
   uploadDocument
 } from "./api";
 import { TaskList } from "./features/tasks/TaskList";
+import { DocumentCard } from "./features/knowledge/DocumentCard";
 import { ScheduleComposer } from "./features/tasks/ScheduleComposer";
 import { ScheduleList } from "./features/tasks/ScheduleList";
 import { isTaskTerminal, taskStatusLabel } from "./features/tasks/taskUtils";
@@ -1530,11 +1531,9 @@ export function App() {
                   <p className="muted">Upload TXT, Markdown, or text PDF files for this chat.</p>
                 ) : (
                   documents.map((document) => (
-                    <div className="mini-card" key={document.id}>
-                      <strong>{document.title}</strong>
-                      <span>{document.source_type}</span>
-                      <p>{document.status}</p>
-                    </div>
+                    <DocumentCard key={document.id} document={document} onUpdated={(updated) =>
+                      setDocuments((current) => current.map((item) => item.id === updated.id ? updated : item))
+                    } />
                   ))
                 )}
               </div>
@@ -1659,7 +1658,15 @@ export function App() {
                   citations.map((citation) => (
                     <div className="mini-card" key={`${citation.document_id}-${citation.chunk_index}`}>
                       <strong>{citation.title}</strong>
-                      <span>Chunk {citation.chunk_index + 1}</span>
+                      <span>Chunk {citation.chunk_index + 1} · {citation.retrieval_method === "hybrid_rrf" ? "Hybrid (RRF)" : citation.retrieval_method === "vector" ? "Semantic" : citation.retrieval_method === "keyword" ? "Keyword" : "Document context"}</span>
+                      {citation.metadata?.selection_method === "mmr" && <span>Diverse evidence · MMR</span>}
+                      {citation.metadata?.reranker && <span>Reranked · {citation.metadata.reranker}</span>}
+                      {citation.metadata?.rerank_status === "fallback" && <span>Reranker unavailable · local ranking</span>}
+                      {citation.metadata?.retrieval_context && <span>{citation.metadata.retrieval_context}</span>}
+                      {citation.source_uri && <span>{citation.source_uri}</span>}
+                      {citation.metadata?.start_char != null && citation.metadata.end_char != null && (
+                        <span>Text position {citation.metadata.start_char + 1}–{citation.metadata.end_char}</span>
+                      )}
                       <p>{citation.content}</p>
                     </div>
                   ))

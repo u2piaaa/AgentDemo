@@ -205,6 +205,15 @@ export async function getTasks(conversationId: string | null): Promise<Task[]> {
   return response.json();
 }
 
+export async function reindexDocument(documentId: string): Promise<KnowledgeDocument> {
+  const response = await fetch(`/api/knowledge/documents/${encodeURIComponent(documentId)}/reindex`, {
+    method: "POST",
+    headers: authHeaders()
+  });
+  if (!response.ok) throw new Error(await readError(response, "Failed to reindex document"));
+  return response.json();
+}
+
 export async function createAgentTask(
   prompt: string,
   conversationId: string | null

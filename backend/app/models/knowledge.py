@@ -26,6 +26,10 @@ class KnowledgeDocument(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     chunks: Mapped[list["KnowledgeChunk"]] = relationship(back_populates="document")
 
+    @property
+    def retrieval_mode(self) -> str:
+        return (self.metadata_ or {}).get("retrieval_mode", "legacy")
+
 
 class KnowledgeChunk(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "knowledge_chunks"

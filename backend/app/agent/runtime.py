@@ -25,6 +25,7 @@ from app.agent.response_policy import AgentResponsePolicy
 from app.agent.state import AgentGraphState
 from app.core.config import get_settings
 from app.core.mcp_security import McpIdentity
+from app.mcp.resources import extract_mcp_resource_text
 from app.models.conversation import Conversation, MemorySummary, Message
 from app.schemas import (
     AgentExecutionState,
@@ -33,6 +34,7 @@ from app.schemas import (
     ToolConfirmationRequest,
     ToolRunResponse,
 )
+from app.services.memory import MemoryService
 from app.services.model_gateway import ModelGateway
 from app.services.plugin_registry import TOOL_PROVIDER_MCP_SERVER, PluginRegistry
 from app.services.rag import Citation, RagService
@@ -377,6 +379,11 @@ class AgentRuntime(AgentResponsePolicy):
         retrieval_method = str(citation.get("retrieval_method") or "unknown").strip()
         score = citation.get("score")
         lines = [f"Knowledge source {index}: {title}"]
+        if citation.get("chunk_index") is not None:
+            lines.append(f"Chunk: {int(citation['chunk_index']) + 1}")
+        section_context = (citation.get("metadata") or {}).get("retrieval_context")
+        if section_context:
+            lines.append(f"Section context: {section_context}")
         if source_uri:
             lines.append(f"Source: {source_uri}")
         if score is not None:
@@ -815,7 +822,7 @@ class AgentRuntime(AgentResponsePolicy):
                     "server_name": str(resource["server_name"]),
                     "uri": uri,
                     "name": name,
-                    "text": str(loaded.get("text") or loaded.get("content") or ""),
+                    "text": extract_mcp_resource_text(loaded),
                 }
             )
         return selected
@@ -1402,7 +1409,7 @@ class AgentRuntime(AgentResponsePolicy):
             .where(Message.conversation_id == conversation_id)
             .where(Message.role.in_(("user", "assistant")))
             .where(Message.content != "")
-            .order_by(Message.created_at.desc())
+            .order_by(Message.created_at.desc(), Message.id.desc())
             .limit(limit)
         )
         messages = [item for item in result.scalars().all() if isinstance(item, Message)]
@@ -1412,6 +1419,8 @@ class AgentRuntime(AgentResponsePolicy):
     async def _load_active_memory_summaries(self, conversation_id: UUID) -> list[str]:
         result = await self.session.execute(
             select(MemorySummary)
+            .join(Conversation, Conversation.id == MemorySummary.conversation_id)
+            .where(Conversation.user_id == self.user_id)
             .where(MemorySummary.conversation_id == conversation_id)
             .where(MemorySummary.valid_to.is_(None))
             .order_by(MemorySummary.updated_at.desc(), MemorySummary.created_at.desc())
@@ -1423,61 +1432,8 @@ class AgentRuntime(AgentResponsePolicy):
             if isinstance(item, MemorySummary) and item.summary
         ]
 
-    async def _load_active_memory_records(self, conversation_id: UUID) -> list[MemorySummary]:
-        result = await self.session.execute(
-            select(MemorySummary)
-            .where(MemorySummary.conversation_id == conversation_id)
-            .where(MemorySummary.valid_to.is_(None))
-            .order_by(MemorySummary.updated_at.desc(), MemorySummary.created_at.desc())
-            .limit(1)
-        )
-        return [
-            item
-            for item in result.scalars().all()
-            if isinstance(item, MemorySummary) and item.summary
-        ]
-
-    async def _load_summary_source_messages(self, conversation_id: UUID) -> list[Message]:
-        result = await self.session.execute(
-            select(Message)
-            .where(Message.conversation_id == conversation_id)
-            .where(Message.role.in_(("user", "assistant")))
-            .where(Message.content != "")
-            .order_by(Message.created_at.asc())
-        )
-        return [item for item in result.scalars().all() if isinstance(item, Message) and item.content]
-
     async def _maybe_update_memory_summary(self, conversation_id: UUID) -> None:
-        messages = await self._load_summary_source_messages(conversation_id)
-        if len(messages) <= max(self.settings.agent_memory_message_limit, 0):
-            return
-
-        existing_records = await self._load_active_memory_records(conversation_id)
-        existing_summary = existing_records[0].summary if existing_records else None
-        try:
-            summary = await self.model_gateway.summarize_messages(
-                [{"role": item.role, "content": item.content} for item in messages],
-                existing_summary=existing_summary,
-            )
-        except Exception:
-            return
-        if not summary:
-            return
-
-        if existing_records:
-            existing_records[0].summary = summary
-            await self.session.commit()
-            return
-
-        self.session.add(
-            MemorySummary(
-                conversation_id=conversation_id,
-                summary=summary,
-                valid_from=messages[0].created_at if messages else None,
-                valid_to=None,
-            )
-        )
-        await self.session.commit()
+        await MemoryService(self.session, self.model_gateway, self.settings, self.user_id).update(conversation_id)
 
     async def _auto_title_conversation(
         self,

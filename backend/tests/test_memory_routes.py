@@ -11,7 +11,7 @@ from app.api.routes.memory import (
     get_memory_summary,
     list_memory_summaries,
 )
-from app.models.conversation import MemorySummary
+from app.models.conversation import Conversation, MemorySummary
 from app.schemas import MemorySummaryRead
 
 
@@ -116,6 +116,9 @@ class FakeMemorySession:
 
     async def execute(self, statement):
         params = statement.compile().params
+        if statement.column_descriptions[0].get("entity") is Conversation:
+            conversation_id = params.get("id_1")
+            return FakeResult([Conversation(id=conversation_id, user_id=self.conversation_owners[conversation_id], metadata_={})])
         user_id = params.get("user_id_1")
         summary_id = params.get("id_1")
         conversation_id = params.get("conversation_id_1")

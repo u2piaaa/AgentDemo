@@ -299,6 +299,13 @@ class KnowledgeDocumentCreate(BaseModel):
     conversation_id: UUID | None = None
     content: str
 
+    @field_validator("content")
+    @classmethod
+    def require_document_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Document must contain non-whitespace text")
+        return value
+
 
 class McpResourceImportRequest(BaseModel):
     server_name: str = Field(min_length=1)
@@ -315,10 +322,12 @@ class KnowledgeDocumentRead(BaseModel):
     title: str
     source_type: str
     status: str
+    retrieval_mode: str = "legacy"
     created_at: datetime
 
 
 class CitationMetadata(BaseModel):
+    model_config = ConfigDict(extra="allow")
     document_title: str
     chunk_index: int
     source_type: str

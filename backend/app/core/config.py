@@ -38,7 +38,15 @@ class Settings(BaseSettings):
     llm_reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None = None
     embedding_dimensions: int = Field(default=1536, ge=1, le=65536)
     embedding_batch_size: int = Field(default=64, ge=1, le=2048)
+    rag_rerank_mode: Literal["local", "api"] = "local"
+    rag_rerank_url: str = ""
+    rag_rerank_model: str = "jina-reranker-v3.5"
+    rag_rerank_api_key: str = Field(default="", repr=False)
+    rag_rerank_timeout_seconds: float = Field(default=3, gt=0, le=30)
+    rag_rerank_candidates: int = Field(default=24, ge=2, le=64)
     agent_memory_message_limit: int = 12
+    agent_memory_timeout_seconds: float = Field(default=15, gt=0, le=120)
+    agent_memory_input_max_chars: int = Field(default=16000, ge=1000, le=100000)
     agent_run_timeout_seconds: float = Field(default=180, gt=0, le=3600)
     agent_retrieval_timeout_seconds: float = Field(default=12, gt=0, le=120)
     agent_context_max_chars: int = Field(default=48000, ge=1000, le=1_000_000)

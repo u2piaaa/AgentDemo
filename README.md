@@ -258,11 +258,18 @@ Knowledge ingestion is mounted at `/api/knowledge`.
 - `POST /api/knowledge/documents` indexes provided text.
 - `POST /api/knowledge/documents/upload` accepts TXT, Markdown, and text-based
   PDF uploads.
-- Documents are chunked with overlap, embedded through `ModelGateway`, and stored
-  in `knowledge_chunks`.
-- Search prefers vector similarity when embeddings are available.
-- If embedding is unavailable, search falls back to keyword matching.
-- Conversation-scoped documents are prioritized over global documents.
+- Paragraph-aware chunks preserve code indentation and normalized text offsets.
+  Title and section context enrich embedding and lexical inputs while quoted
+  evidence stays verbatim. Existing documents can be upgraded with the **Reindex
+  document** control or `POST /api/knowledge/documents/{id}/reindex`.
+- Semantic and multilingual lexical candidates are always combined with reciprocal
+  rank fusion (RRF). SQL filters and ranks lexical matches before limiting them.
+  Equal similarity scores share a rank; scope breaks relevance ties.
+- Local MMR selection reduces redundant evidence. Optional Jina-compatible
+  listwise reranking supports `jina-reranker-v3.5` and self-hosted endpoints;
+  timeout or malformed output preserves local ranking. See [RAG configuration](docs/rag-memory.md).
+- All retrieval paths enforce owner and conversation/global scope. Missing or slow
+  embeddings retain keyword evidence; the inspector shows indexing and retrieval modes.
 - Citations include document id, title, chunk index, content, source type, score,
   retrieval method, and citation metadata.
 
@@ -273,10 +280,13 @@ Conversation memory has two layers:
 - Long-term memory summaries have API support under `/api/memory/summaries` for
   listing, reading, disabling, and deleting summaries owned through their
   conversation.
-- `AgentRuntime` injects active memory summaries into model context and refreshes
-  the active summary after long conversations. Summary generation is best-effort:
-  if model credentials are missing or the provider fails, the chat response still
-  succeeds and memory refresh is skipped for that turn.
+- Incremental compaction processes only older, unprocessed messages, up to 50
+  messages / 16,000 input characters in 15 seconds by default. A durable cursor
+  tracks partial large messages too. Conversation row locking prevents competing
+  workers from overwriting the summary; failure/cancellation never consumes input.
+- Disabling/deleting a summary preserves the processed-history boundary so those
+  facts are not automatically regenerated. Previously disabled legacy summaries
+  are respected. Summary generation remains best-effort after the answer is saved.
 
 ## Local Setup
 

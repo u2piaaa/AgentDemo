@@ -24,10 +24,10 @@ and audit boundary remain compatibility requirements.
 | 2 | Model gateway | Provider-neutral configuration, bounded retries/timeouts, robust streaming and embedding validation | Deterministic transport fault tests; no duplicated streamed tokens; existing model/runtime tests | Released: `4535e3c` |
 | 3 | Agent runtime and conversations | Explicit execution/context budgets, cancellation and reliable continuation while preserving graph/SSE semantics | Runtime/route regression tests, protocol sanitization, real confirmation flow | Released: `eaabd47` |
 | 4 | Tools, search and MCP | Current stable MCP protocol capabilities, accurate connection/error state, bounded discovery and execution | MCP/security/executor/search suites; real tool confirmation and history | Released: `48ba514` |
-| 5 | RAG and memory | Hybrid ranking and bounded context with reliable source attribution and scoped retrieval | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Planned |
+| 5 | RAG and memory | Context-enriched chunks, hybrid RRF, diversity selection and current listwise reranker integration; reliable incremental memory | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Planned |
 | 6 | Background tasks and schedules | Deadline/recovery/cancellation correctness and inspectable execution budgets | Worker/scheduler/timezone/concurrency tests; real scheduled task flow | Planned |
 | 7 | Authentication and API operations | Current password hashing with legacy migration, bounded operational checks and safe defaults | Real PostgreSQL register/login writes; ownership/auth/health tests | Planned |
-| 8 | Frontend workspace | Current stable React/Vite toolchain, resilient streaming and accessible responsive task/runtime controls | Unit tests/build/audit; desktop/mobile browser chat, tools and inspector | Planned |
+| 8 | Frontend workspace | Claude-inspired warm neutral visual system, simpler sidebar/composer and dialogue typography; current React/Vite, resilient streaming and accessible responsive task/runtime controls | Unit tests/build/audit; desktop/mobile browser chat, tools and inspector | Planned |
 | 9 | Integration and release | Reconcile docs/config/migrations and validate the combined app | Full quality gates, migrations, browser acceptance, both remote branches and live process verification | Planned |
 
 Each module gets a substantive, measured improvement. Preview features and
@@ -237,13 +237,43 @@ Existing service arguments and credential mappings were preserved.
 Acceptance still serves the isolated database and fixtures on ports 8001/5174;
 the normal 8000/5173 services remain stopped until the final combined release.
 
+## Iteration 5 — contextual hybrid retrieval and incremental memory
+
+Implemented extractive title/section contextualization, SQL-ranked multilingual
+lexical retrieval, semantic + lexical RRF with equal-score ties, local MMR evidence
+selection, and an opt-in Jina-compatible listwise adapter targeting current
+`jina-reranker-v3.5`. This incorporates the user's request for newer RAG techniques.
+The default pipeline adds no service dependency; neural transport is optional and
+bounded, with local fallback. Details and primary references: [RAG and memory](rag-memory.md).
+
+All retrieval paths now enforce ownership. Citation bodies remain verbatim, with
+normalized positions and retrieval provenance persisted across reloads. A real
+Reindex document control upgrades existing chunks while preserving their IDs and
+retains existing vectors if embedding regeneration fails.
+
+Memory compaction now persists a source cursor (including offsets within long
+messages), processes older history incrementally, enforces input/output/time bounds,
+and uses PostgreSQL row locks to avoid concurrent overwrites. Disabled/deleted
+summaries and legacy retirement timestamps do not replay forgotten history.
+Standard MCP resource text blocks also now enter runtime context correctly.
+
+The user's added Claude-style frontend direction is recorded in iteration 8:
+warm neutral backgrounds, quieter sidebar, improved dialogue typography and
+composer while preserving runtime/tool/task controls.
+
+Acceptance before release: 375 backend tests pass against PostgreSQL/pgvector
+(85.27% coverage), 21 frontend tests and production build pass, Ruff passes, and
+deterministic agent evaluations pass 12/12. Real browser checks cover upload,
+existing-document reindex, context-aware queries, listwise HTTP contract, cited
+answer persistence after reload, and 390px/1440px responsive layouts. Final source
+review and remote CI precede merging into `run`. The isolated acceptance database is `agent_upgrade_20261015`; HTTP model,
+MCP and reranking fixtures remain under ignored `.local`. They validate application
+plumbing and deterministic retrieval behavior, not neural model benchmark quality.
+
 ## Next iteration handoff
 
-Iteration 5 reviews RAG and memory: ranking quality, owner/conversation scoping,
-bounded retrieval and source attribution. Verify against real PostgreSQL and
-document upload/query flows. Keep tool actions inside `ToolExecutor`.
-
-The isolated acceptance database is `agent_upgrade_20261015`. Local HTTP model
-and MCP fixtures live under ignored `.local` in the test worktree. The browser
-test account and fixture replies belong only to that database. Do not copy
-fixture settings or synthetic model answers into the user's normal database.
+After iteration 5 acceptance/release, iteration 6 upgrades background tasks and
+schedules: deadlines, durable recovery, cancellation and timezone/concurrency
+behavior, verified through real task execution. Keep tools inside `ToolExecutor`.
+Normal serving ports 8000/5173 remain stopped until the combined release; acceptance
+uses 8001/5174 and synthetic fixtures only. Never copy those settings to production.

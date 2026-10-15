@@ -1,11 +1,12 @@
 from datetime import UTC, datetime
+import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
 from app.models.knowledge import KnowledgeChunk, KnowledgeDocument
-from app.services.rag import RagService
+from app.services.rag import Citation, RagService
 
 
 def test_split_text_uses_overlap() -> None:
@@ -189,7 +190,7 @@ def test_keyword_terms_are_bounded_and_ignore_common_question_noise() -> None:
 
 
 @pytest.mark.asyncio
-async def test_conversation_documents_are_prioritized_over_global_keyword_results() -> None:
+async def test_keyword_relevance_precedes_conversation_scope_tiebreaker() -> None:
     conversation_id = uuid4()
     local_document = KnowledgeDocument(
         id=uuid4(),
@@ -227,8 +228,8 @@ async def test_conversation_documents_are_prioritized_over_global_keyword_result
 
     citations = await service._search_by_keywords("alpha beta", conversation_id, limit=2)
 
-    assert [citation.title for citation in citations] == ["Local Notes", "Global Notes"]
-    assert [citation.score for citation in citations] == [1.0, 2.0]
+    assert [citation.title for citation in citations] == ["Global Notes", "Local Notes"]
+    assert [citation.score for citation in citations] == [2.0, 1.0]
 
 
 class FakeSession:
@@ -237,3 +238,84 @@ class FakeSession:
 
     async def execute(self, statement):
         return SimpleNamespace(all=lambda: self.rows)
+
+
+@pytest.mark.parametrize("size,overlap", [(0, 0), (50, 50), (50, -1), (20, 40)])
+def test_chunker_rejects_non_progressing_windows(size, overlap):
+    with pytest.raises(ValueError):
+        RagService(None)._split_text("content", size, overlap)
+
+
+def test_chunk_spans_cover_text_preserving_paragraphs_and_code_indentation():
+    service = RagService(None)
+    content = "# Header\n\n" + "    code = 'value'\n\nParagraph sentence.\n\n" * 60
+    clean = content.strip()
+    spans = service._split_spans(content, chunk_size=300, overlap=40)
+    covered = set()
+    for text, start, end in spans:
+        assert text == clean[start:end]
+        assert len(text) <= 300
+        covered.update(range(start, end))
+    assert len(covered) == len(clean)
+    assert "    code" in spans[0][0]
+    assert "\n\n" in spans[0][0]
+
+
+@pytest.mark.asyncio
+async def test_embedding_timeout_keeps_keyword_evidence():
+    doc = KnowledgeDocument(id=uuid4(), title="Exact", source_type="text", status="indexed")
+    chunk = KnowledgeChunk(id=uuid4(), document_id=doc.id, chunk_index=0, content="ZXQ-4821")
+    service = RagService(FakeSession([(chunk, doc)]))
+    service.model_gateway.settings = service.model_gateway.settings.model_copy(
+        update={"agent_retrieval_timeout_seconds": 0.02}
+    )
+
+    async def slow(texts):
+        await asyncio.sleep(5)
+        return []
+
+    service._embed_or_empty = slow
+    results = await asyncio.wait_for(service.search("ZXQ-4821"), 0.5)
+    assert results[0].retrieval_method == "keyword"
+
+
+@pytest.mark.asyncio
+async def test_wrong_storage_dimension_falls_back_to_keyword():
+    service = RagService(None)
+
+    async def vectors(texts):
+        return [[1.0, 0.0]]
+
+    service.model_gateway.embed_texts = vectors
+    assert await service._embed_or_empty(["text"]) == []
+
+
+def test_contextual_chunks_keep_section_lineage_without_modifying_evidence():
+    service = RagService(None)
+    text = "# Aurora runbook\n\n## Regional failover\n\n" + "Worker recovery steps. " * 90
+    spans = service._split_spans(text)
+    contexts = service._chunk_contexts("Operations 2026", text, spans)
+    assert len(contexts) == len(spans)
+    assert all(
+        "Operations 2026" in context and "Regional failover" in context for context in contexts
+    )
+    assert "Regional failover" not in spans[-1][0]
+    assert all(len(context) <= 700 for context in contexts)
+
+
+def test_rrf_equal_vector_scores_do_not_override_stronger_lexical_evidence():
+    from dataclasses import replace
+
+    service = RagService(None)
+    first = Citation("a", "Generic", 0, "First", "text", None, 1.0, "vector")
+    exact = Citation("b", "Specific", 0, "Exact", "text", None, 1.0, "vector")
+    results = service._fuse(
+        [first, exact],
+        [
+            replace(exact, score=5.0, retrieval_method="keyword"),
+            replace(first, score=1.0, retrieval_method="keyword"),
+        ],
+        2,
+    )
+    assert [item.document_id for item in results] == ["b", "a"]
+    assert [item.evidence["vector_rank"] for item in results] == [1, 1]
