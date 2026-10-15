@@ -111,11 +111,19 @@ def normalize_mcp_tool_result(result: Any) -> Any:
         return result
     content = result.get("content")
     if isinstance(content, list):
-        text_parts = [
-            item.get("text")
-            for item in content
-            if isinstance(item, dict) and item.get("type") == "text" and item.get("text")
-        ]
+        text_parts = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text" and item.get("text"):
+                text_parts.append(str(item["text"]))
+            elif item.get("type") == "resource" and isinstance(item.get("resource"), dict):
+                resource = item["resource"]
+                if isinstance(resource.get("text"), str) and resource["text"]:
+                    # GitHub MCP returns downloaded files as embedded text resources.
+                    # Include their body in bounded model context, without fetching URIs.
+                    source = f"Resource: {resource['uri']}\n" if resource.get("uri") else ""
+                    text_parts.append(source + resource["text"])
         if text_parts:
             normalized = {"content": "\n".join(str(part) for part in text_parts)}
             for key in ("isError", "url", "structuredContent"):

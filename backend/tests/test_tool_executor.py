@@ -239,6 +239,33 @@ async def test_mcp_is_error_result_returns_failed_status() -> None:
 
 
 @pytest.mark.asyncio
+async def test_embedded_mcp_document_is_bounded_and_audited() -> None:
+    class DocumentClient:
+        async def call_tool(self, server_name, tool_name, arguments):
+            return {"content": [
+                {"type": "text", "text": "Downloaded file"},
+                {"type": "resource", "resource": {
+                    "uri": "repo://owner/repo/README.md",
+                    "text": "Project supports retrieval. " * 1000,
+                }},
+            ], "isError": False}
+
+    tool = make_mcp_tool()
+    tool.client = DocumentClient()
+    tool.manifest.output_strategy = {"max_chars": 200}
+    session = FakeAuditSession()
+    response = await ToolExecutor().run(
+        tool, {"url": "https://example.com"}, confirmed=True, session=session,
+    )
+    assert response.status == "success"
+    assert "Project supports retrieval." in response.output["content"]
+    assert len(response.output["content"]) <= 200
+    assert response.output["_truncated"] is True
+    assert "Project supports retrieval." in response.output_summary
+    assert session.items[-1].output_summary == response.output_summary
+
+
+@pytest.mark.asyncio
 async def test_tool_run_returns_timeout_result() -> None:
     def handler() -> None:
         time.sleep(0.05)

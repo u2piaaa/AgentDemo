@@ -159,6 +159,25 @@ def test_mcp_text_result_omits_duplicate_raw_payload() -> None:
     }
 
 
+@pytest.mark.parametrize("with_notice", [False, True])
+def test_embedded_resource_body_enters_text_context(with_notice) -> None:
+    content = [{"type": "text", "text": "Downloaded README"}] if with_notice else []
+    content.extend([
+        {"type": "resource", "resource": {
+            "uri": "repo://owner/project/README.md", "mimeType": "text/markdown",
+            "text": "# Project\nAn agent with retrieval and tools.",
+        }},
+        {"type": "resource", "resource": {"uri": "file:///binary", "blob": "BINARY_PAYLOAD"}},
+        {"type": "resource_link", "uri": "https://example.com/unrequested"},
+    ])
+    normalized = normalize_mcp_tool_result({"content": content, "isError": False})
+    assert "Resource: repo://owner/project/README.md\n# Project" in normalized["content"]
+    assert "An agent with retrieval and tools." in normalized["content"]
+    assert "BINARY_PAYLOAD" not in str(normalized)
+    assert "https://example.com/unrequested" not in normalized["content"]
+    assert normalized["isError"] is False
+
+
 @pytest.mark.asyncio
 async def test_mcp_tool_maps_to_registered_tool_and_executes() -> None:
     client = McpClientManager(

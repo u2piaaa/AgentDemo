@@ -59,6 +59,12 @@ plugins remain `provider=local_plugin`.
 ## Resource And Prompt Mapping
 
 MCP resources can be loaded into runtime context when explicitly referenced.
+
+Text resources embedded in a tool result are also included in its normalized
+text output. GitHub MCP uses this form for downloaded file bodies; a download
+notice alone is not the file content. The normal `ToolExecutor` size limit and
+audit behavior still apply. Resource links are not fetched implicitly, and binary
+resource blobs are omitted from textual context.
 They can also be imported into knowledge with:
 
 - `source_type=mcp_resource`
