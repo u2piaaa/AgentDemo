@@ -57,11 +57,17 @@ class ChatRequest(BaseModel):
 
 class ToolConfirmationRequest(BaseModel):
     conversation_id: UUID
+    approval_id: UUID | None = None
     message: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
     reason: str = "Confirmed by the user."
     task_type: str = "conversation"
+
+
+class ToolApprovalCancellation(BaseModel):
+    conversation_id: UUID
+    approval_id: UUID
 
 
 class ChatEvent(BaseModel):
@@ -94,6 +100,8 @@ class AgentExecutionState(BaseModel):
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     observations: list[str] = Field(default_factory=list)
     final_answer: str = ""
+    context_budget: dict[str, int] = Field(default_factory=dict)
+    approval_id: UUID | None = None
     trace_id: str = Field(default_factory=lambda: uuid4().hex)
 
 

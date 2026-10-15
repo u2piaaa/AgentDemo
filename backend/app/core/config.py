@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     embedding_dimensions: int = Field(default=1536, ge=1, le=65536)
     embedding_batch_size: int = Field(default=64, ge=1, le=2048)
     agent_memory_message_limit: int = 12
+    agent_run_timeout_seconds: float = Field(default=180, gt=0, le=3600)
+    agent_retrieval_timeout_seconds: float = Field(default=12, gt=0, le=120)
+    agent_context_max_chars: int = Field(default=48000, ge=1000, le=1_000_000)
+    agent_approval_ttl_seconds: int = Field(default=86400, ge=60, le=604800)
     agent_task_max_concurrency: int = 2
     agent_task_default_max_attempts: int = 3
     agent_task_retry_base_seconds: int = 5

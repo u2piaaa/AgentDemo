@@ -20,14 +20,14 @@ def build_agent_graph(runtime, mode: GraphMode = "chat"):
     graph.add_node("retrieve_context", nodes.retrieve_context)
     graph.add_node("plan", nodes.plan)
     graph.add_node("execute_tool", nodes.execute_tool)
+    graph.add_node("await_confirmation", nodes.await_confirmation)
     graph.add_node("generate_answer", nodes.generate_answer)
     graph.add_node("save_assistant_message", nodes.save_assistant_message)
     graph.add_node("update_memory_summary", nodes.update_memory_summary)
 
     if mode == "confirmed_tool":
         graph.add_edge(START, "load_context")
-        graph.add_edge("load_context", "retrieve_context")
-        graph.add_edge("retrieve_context", "plan")
+        graph.add_edge("load_context", "plan")
         graph.add_edge("plan", "execute_tool")
         graph.add_edge("execute_tool", "generate_answer")
     else:
@@ -49,12 +49,13 @@ def build_agent_graph(runtime, mode: GraphMode = "chat"):
         graph.add_conditional_edges(
             "execute_tool",
             _route_after_execute_tool,
-            {"plan": "plan", "update_memory_summary": "update_memory_summary"},
+            {"plan": "plan", "await_confirmation": "await_confirmation"},
         )
 
     graph.add_edge("generate_answer", "save_assistant_message")
     graph.add_edge("save_assistant_message", "update_memory_summary")
     graph.add_edge("update_memory_summary", END)
+    graph.add_edge("await_confirmation", END)
     return graph.compile()
 
 
@@ -84,5 +85,5 @@ def _route_after_execute_tool(state: AgentGraphState) -> str:
         and result.get("status") == "failed"
         and result.get("error") == "Tool requires confirmation before execution"
     ):
-        return "update_memory_summary"
+        return "await_confirmation"
     return "plan"

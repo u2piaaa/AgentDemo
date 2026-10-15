@@ -1,3 +1,4 @@
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from app.agent.events import done_event, emit_event, emit_runtime_event, emit_status
@@ -27,7 +28,12 @@ class AgentGraphNodes:
         conversation = state.get("conversation")
         if conversation is not None and state.get("save_user_message", True):
             await self.runtime._auto_title_conversation(conversation, state["message"], history)
-        return {"history": history, "memory_summaries": memory_summaries}
+        return {
+            "history": history, "memory_summaries": memory_summaries,
+            "route": self.runtime.model_gateway.route(
+                state.get("task_type", "conversation"), state["message"]
+            ),
+        }
 
     async def save_user_message(self, state: AgentGraphState) -> dict[str, Any]:
         if not state.get("save_user_message", True):
@@ -56,11 +62,17 @@ class AgentGraphNodes:
     async def retrieve_context(self, state: AgentGraphState) -> dict[str, Any]:
         emit_status("retrieving_context", state)
         conversation_id = state.get("conversation_id")
-        citations = self.runtime._dump_citations(
-            await self.runtime._retrieve_context(state["message"], conversation_id)
-        )
-        mcp_resources = await self.runtime._load_mcp_resources_for_context(state["message"])
-        mcp_prompts = await self.runtime._load_mcp_prompts_for_context(state["message"])
+        citations, mcp_resources, mcp_prompts = [], [], []
+        try:
+            async with asyncio.timeout(self.runtime.settings.agent_retrieval_timeout_seconds):
+                citations = self.runtime._dump_citations(
+                    await self.runtime._retrieve_context(state["message"], conversation_id)
+                )
+                mcp_resources = await self.runtime._load_mcp_resources_for_context(state["message"])
+                mcp_prompts = await self.runtime._load_mcp_prompts_for_context(state["message"])
+        except TimeoutError:
+            await self.runtime.session.rollback()
+            emit_status("retrieval_timeout", state)
         return {
             "citations": citations,
             "mcp_resources": mcp_resources,
@@ -116,6 +128,18 @@ class AgentGraphNodes:
             **execution_state_updates(execution_state),
             "tool_rounds": state.get("tool_rounds", 0) + 1,
         }
+
+    async def await_confirmation(self, state: AgentGraphState) -> dict[str, Any]:
+        execution_state = graph_state_to_execution_state(state)
+        # Background tasks report the executor's block and require an interactive chat.
+        if state.get("task_id") is None:
+            emit_status("saving_confirmation", state)
+            await self.runtime.approvals.create(
+                execution_state, state["route"], state.get("task_type", "conversation"),
+                self.runtime.settings.agent_approval_ttl_seconds,
+            )
+        emit_runtime_event(done_event(state["conversation_id"], execution_state, state["route"]))
+        return execution_state_updates(execution_state)
 
     async def generate_answer(self, state: AgentGraphState) -> dict[str, Any]:
         route = state["route"]
@@ -176,6 +200,8 @@ def graph_state_to_execution_state(state: AgentGraphState) -> AgentExecutionStat
         tool_calls=list(state.get("tool_calls", [])),
         observations=list(state.get("observations", [])),
         final_answer=state.get("final_answer", ""),
+        context_budget=state.get("context_budget", {}),
+        approval_id=state.get("approval_id"),
         trace_id=state["trace_id"],
     )
 
@@ -192,5 +218,7 @@ def execution_state_updates(state: AgentExecutionState) -> dict[str, Any]:
         "tool_calls": state.tool_calls,
         "observations": state.observations,
         "final_answer": state.final_answer,
+        "context_budget": state.context_budget,
+        "approval_id": state.approval_id,
         "trace_id": state.trace_id,
     }

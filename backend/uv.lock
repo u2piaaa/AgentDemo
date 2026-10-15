@@ -1313,6 +1313,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
+    { name = "anyio" },
     { name = "asyncpg" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -1341,6 +1342,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.20.0,<2" },
+    { name = "anyio", specifier = ">=4.15.1,<5" },
     { name = "asyncpg", specifier = ">=0.32.0,<1" },
     { name = "fastapi", specifier = ">=0.143.1,<1" },
     { name = "httpx", specifier = ">=0.28.1,<1" },

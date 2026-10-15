@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -6,7 +7,7 @@ from fastapi import HTTPException
 
 from app.api.routes import conversations
 from app.api.routes.conversations import chat_stream, confirm_tool_stream, delete_conversation
-from app.schemas import ChatRequest, ToolConfirmationRequest
+from app.schemas import ChatRequest, ToolConfirmationRequest, ToolApprovalCancellation
 
 
 class FakeResult:
@@ -43,12 +44,14 @@ class FakeRuntime:
     def __init__(self, *, plugin_registry, **kwargs) -> None:
         self.plugin_registry = plugin_registry
         self.seen_registries.append(plugin_registry)
+        self.approvals = SimpleNamespace(claim=AsyncMock(return_value=SimpleNamespace(id=uuid4())))
 
     async def stream(self, payload):
         if False:
             yield {}
 
-    async def stream_confirmed_tool(self, payload):
+    async def stream_confirmed_tool(self, payload, *, approval):
+        assert approval.id is not None
         if False:
             yield {}
 
@@ -114,6 +117,37 @@ async def test_confirm_tool_stream_uses_unified_tool_registry(monkeypatch) -> No
     )
 
     assert FakeRuntime.seen_registries == [tool_registry]
+
+
+async def test_stale_confirmation_is_rejected_before_sse_headers(monkeypatch):
+    runtime = SimpleNamespace(
+        approvals=SimpleNamespace(claim=AsyncMock(side_effect=HTTPException(409, "Already resolved"))),
+        stream_confirmed_tool=AsyncMock(),
+    )
+    monkeypatch.setattr(conversations, "AgentRuntime", lambda **kwargs: runtime)
+    user_id, conversation_id = uuid4(), uuid4()
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(tool_registry=None)))
+    with pytest.raises(HTTPException) as exc:
+        await confirm_tool_stream(
+            ToolConfirmationRequest(conversation_id=conversation_id, message="read page", tool_name="fetch"),
+            request=request, current_user=SimpleNamespace(id=user_id),
+            session=FakeDeleteSession(SimpleNamespace(id=conversation_id, user_id=user_id)),
+        )
+    assert exc.value.status_code == 409
+    runtime.stream_confirmed_tool.assert_not_called()
+
+
+async def test_cancel_route_binds_current_owner_and_propagates_conflict(monkeypatch):
+    store = SimpleNamespace(cancel=AsyncMock())
+    monkeypatch.setattr(conversations, "ToolApprovalStore", lambda session: store)
+    user_id, conversation_id, approval_id = uuid4(), uuid4(), uuid4()
+    payload = ToolApprovalCancellation(conversation_id=conversation_id, approval_id=approval_id)
+    result = await conversations.cancel_tool_approval(payload, SimpleNamespace(id=user_id), object())
+    assert result == {"status": "cancelled"}
+    store.cancel.assert_awaited_once_with(user_id, conversation_id, approval_id)
+    store.cancel.side_effect = HTTPException(409, "Already resolved")
+    with pytest.raises(HTTPException):
+        await conversations.cancel_tool_approval(payload, SimpleNamespace(id=user_id), object())
 
 
 @pytest.mark.asyncio

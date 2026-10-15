@@ -140,9 +140,28 @@ integration-only and skip it when the required environment variable is unset.
 
 ## Database Strategy
 
-Route and service tests currently use lightweight fakes for many ownership and
-state-transition checks. Full local runs still need PostgreSQL + pgvector for
-migrations and end-to-end manual testing.
+Route and service tests use lightweight fakes for many ownership checks. Durable
+approval tests additionally use real PostgreSQL row locks, JSONB matching and
+separate sessions to verify restart persistence, owner binding, expiry,
+confirmation/cancellation races and rejection of replay. CI runs migrations
+and these integration tests on PostgreSQL 16 with pgvector for every Python
+version. Model calls remain offline.
+
+To include database tests locally, explicitly set `TEST_DATABASE_URL` to a
+dedicated migrated test database. Without it, only integration tests skip.
+The fixtures create unique synthetic users and remove only their own rows.
+
+```powershell
+$env:TEST_DATABASE_URL = 'postgresql+asyncpg://agent:agent@localhost:5432/agent_test'
+$env:DATABASE_URL = $env:TEST_DATABASE_URL
+uv run --locked --extra dev alembic upgrade head
+uv run --locked --extra dev pytest tests/test_tool_approvals.py tests/test_runtime_limits.py tests/test_context_budget.py -q
+```
+
+Browser acceptance for confirmation changes must include: wait for Confirm,
+reload, restart the backend, confirm and inspect the final answer/tool history;
+create a second approval, cancel, reload and verify it stays cancelled. Check
+the composer and Runtime inspector at a mobile viewport as well.
 
 Before release-style verification:
 

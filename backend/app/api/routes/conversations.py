@@ -12,6 +12,7 @@ from app.models.conversation import Conversation, MemorySummary, Message
 from app.models.knowledge import KnowledgeChunk, KnowledgeDocument
 from app.models.task import Task
 from app.models.tool import ToolCall
+from app.services.tool_approvals import ToolApprovalStore
 from app.schemas import (
     ChatRequest,
     ConversationCreate,
@@ -19,6 +20,7 @@ from app.schemas import (
     ConversationUpdate,
     MessageRead,
     ToolConfirmationRequest,
+    ToolApprovalCancellation,
 )
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
@@ -136,7 +138,20 @@ async def confirm_tool_stream(
         plugin_registry=request.app.state.tool_registry,
         user_id=current_user.id,
     )
-    return EventSourceResponse(runtime.stream_confirmed_tool(payload))
+    approval = await runtime.approvals.claim(current_user.id, payload)
+    return EventSourceResponse(runtime.stream_confirmed_tool(payload, approval=approval))
+
+
+@router.post("/chat/confirm/cancel")
+async def cancel_tool_approval(
+    payload: ToolApprovalCancellation,
+    current_user: CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
+    await ToolApprovalStore(session).cancel(
+        current_user.id, payload.conversation_id, payload.approval_id,
+    )
+    return {"status": "cancelled"}
 
 
 async def get_owned_conversation(

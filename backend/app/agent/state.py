@@ -20,6 +20,8 @@ class AgentGraphState(TypedDict, total=False):
     tool_calls: list[dict[str, Any]]
     observations: list[str]
     final_answer: str
+    context_budget: dict[str, int]
+    approval_id: UUID | None
     trace_id: str
     route: ModelRoute
     tool_rounds: int

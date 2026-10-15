@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import {
   cancelTask,
+  cancelToolApproval,
   checkAccessToken,
   clearAccessToken,
   clearAuthToken,
@@ -678,22 +679,20 @@ export function App() {
     }
   }
 
-  function handleCancelTool(toolId: string) {
-    pendingConfirmationConversationRef.current = null;
-    setConfirmationDecisions((current) => ({ ...current, [toolId]: "cancelled" }));
-    setExecutionTraces((current) => {
-      const next: Record<string, ExecutionTrace> = {};
-      for (const [messageId, trace] of Object.entries(current)) {
-        next[messageId] = {
-          ...trace,
-          toolCalls: trace.toolCalls.map((tool) =>
-            tool.id === toolId ? { ...tool, status: "cancelled", error: "Cancelled in the frontend." } : tool
-          )
-        };
-      }
-      executionTraceRef.current = next;
-      return next;
-    });
+  async function handleCancelTool(tool: ToolTrace) {
+    if (!activeConversationId || !tool.approval_id || isStreaming) return;
+    try {
+      await cancelToolApproval(activeConversationId, tool.approval_id);
+      pendingConfirmationConversationRef.current = null;
+      setConfirmationDecisions((current) => ({ ...current, [tool.id]: "cancelled" }));
+      const loaded = await getMessages(activeConversationId);
+      setMessages(loaded);
+      executionTraceRef.current = {};
+      setExecutionTraces({});
+      setStatus("Tool approval cancelled");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to cancel tool approval");
+    }
   }
 
   function findPreviousUserMessage(assistantMessageId: string): string {
@@ -731,6 +730,7 @@ export function App() {
       await streamConfirmedTool(
         {
           conversationId: activeConversationId,
+          approvalId: tool.approval_id,
           message: originalMessage,
           toolName: tool.tool_name,
           arguments: tool.arguments,
@@ -814,7 +814,12 @@ export function App() {
     }
     if (event.event === "done") {
       const conversationId = event.data.conversation_id;
-      const liveTrace = executionTraceRef.current[assistantMessageId];
+      const existingTrace = executionTraceRef.current[assistantMessageId];
+      const durableTrace = traceFromDoneEvent(event.data);
+      const liveTrace = existingTrace ? {
+        ...existingTrace, toolCalls: durableTrace.toolCalls
+      } : durableTrace;
+      updateExecutionTrace(assistantMessageId, () => liveTrace);
       const awaitingConfirmation = hasPendingConfirmation(liveTrace);
       setActiveConversationId(conversationId);
       setCitations(event.data.citations);
@@ -995,7 +1000,7 @@ export function App() {
       <div className={`execution-step tool-step ${tool.status}`} key={tool.id}>
         {tool.status === "running" ? (
           <Loader2 className="spin" size={15} aria-hidden="true" />
-        ) : tool.status === "success" ? (
+        ) : tool.status === "success" || tool.status === "approved" ? (
           <CheckCircle2 size={15} aria-hidden="true" />
         ) : tool.status === "cancelled" ? (
           <PauseCircle size={15} aria-hidden="true" />
@@ -1023,13 +1028,15 @@ export function App() {
                 <button
                   className="secondary-action compact"
                   type="button"
-                  disabled={isStreaming}
+                  disabled={isStreaming || !tool.approval_id}
                   onClick={() => void handleConfirmTool(messageId, tool)}
                 >
                   <Check size={15} aria-hidden="true" />
                   Confirm
                 </button>
-                <button className="danger-action compact" type="button" onClick={() => handleCancelTool(tool.id)}>
+                <button className="danger-action compact" type="button"
+                  disabled={isStreaming || !tool.approval_id}
+                  onClick={() => void handleCancelTool(tool)}>
                   <X size={15} aria-hidden="true" />
                   Cancel
                 </button>

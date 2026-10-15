@@ -22,7 +22,7 @@ and audit boundary remain compatibility requirements.
 | --- | --- | --- | --- | --- |
 | 1 | Dependencies and quality gates | Current stable backend packages, reproducible lockfile, Python compatibility matrix, dependency audits, baseline vulnerability fix | Clean locked install; full backend tests, coverage, evaluations and lint; frontend tests/build/audit | Released: `8895a7a` |
 | 2 | Model gateway | Provider-neutral configuration, bounded retries/timeouts, robust streaming and embedding validation | Deterministic transport fault tests; no duplicated streamed tokens; existing model/runtime tests | Released: `4535e3c` |
-| 3 | Agent runtime and conversations | Explicit execution/context budgets, cancellation and reliable continuation while preserving graph/SSE semantics | Runtime/route regression tests, protocol sanitization, real confirmation flow | Planned |
+| 3 | Agent runtime and conversations | Explicit execution/context budgets, cancellation and reliable continuation while preserving graph/SSE semantics | Runtime/route regression tests, protocol sanitization, real confirmation flow | Verified locally; release in progress |
 | 4 | Tools, search and MCP | Current stable MCP protocol capabilities, accurate connection/error state, bounded discovery and execution | MCP/security/executor/search suites; real tool confirmation and history | Planned |
 | 5 | RAG and memory | Hybrid ranking and bounded context with reliable source attribution and scoped retrieval | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Planned |
 | 6 | Background tasks and schedules | Deadline/recovery/cancellation correctness and inspectable execution budgets | Worker/scheduler/timezone/concurrency tests; real scheduled task flow | Planned |
@@ -114,15 +114,61 @@ refresh/replay regression checks. It is not a model transport regression.
 passed all Python versions and frontend checks. Commit `4535e3c` was
 fast-forwarded into `run` and both release branches were pushed.
 
+## Iteration 3 — runtime and conversation reliability
+
+Official references checked on 2026-10-15:
+
+- [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence)
+  and [interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts):
+  persistence and side-effect replay require deliberate boundaries. This
+  iteration persists approval/continuation snapshots in the existing PostgreSQL
+  conversation store; it does not claim arbitrary node checkpoint/resume.
+- [AnyIO cancellation](https://anyio.readthedocs.io/en/stable/cancellation.html):
+  SSE disconnects need bounded, shielded asynchronous finalization.
+- [pgvector Docker tags](https://github.com/pgvector/pgvector#docker): the CI
+  integration database uses the published `0.8.7-pg16` image.
+
+Implemented:
+
+- A blocked tool saves an empty assistant message containing its trace and an
+  expiring, owner-bound approval ID. It survives browser reload and process
+  restart; it does not enter the model's history or trigger memory summaries.
+- Confirmation locks the approval row, checks the original server-authored
+  plan and commits consumption before calling `ToolExecutor`. Duplicate,
+  expired, mismatched and cross-owner requests cannot execute tools. Existing
+  clients without an ID must match an exact pending persisted plan.
+- Cancellation is a persisted API operation. Interruption never requeues an
+  approval automatically: a tool effect may already have completed. The UI
+  points to continuation/tool history instead of offering replay.
+- Continuation restores earlier observations and source context without
+  rerunning earlier tools or repeating retrieval. Existing SSE event names and
+  the `done` payload contract are preserved; approval details extend tool traces.
+- Configurable 180-second run deadline, 12-second retrieval deadline,
+  48,000-character model input budget and 24-hour approval lifetime. Retrieval
+  timeout is visible and permits a response with available context. Oversized
+  requests fail before graph side effects; cancelled streams close generators.
+
+Acceptance:
+
+- Full backend: 303 passed, 1 paid/live test deselected; coverage 83.16%.
+  Approval store coverage 98%, context budgeting 100%. This includes real
+  PostgreSQL simultaneous-confirm and confirm/cancel races.
+- Ruff and 12/12 deterministic Agent evaluations: passed.
+- Frontend: 21 tests and production build passed.
+- Actual browser with isolated PostgreSQL and local model/MCP fixtures:
+  pending approval survived refresh and backend restart; continuation produced
+  one tool result and persisted answer; cancellation survived refresh.
+- Mobile 390 × 844: input/actions fit; Runtime opens as a usable bottom sheet.
+  Ignored screenshots: `.local/runtime-mobile-composer.jpg` and
+  `.local/runtime-mobile-inspector.jpg` in the test worktree.
+
 ## Next iteration handoff
 
-Iteration 3 starts from the verified `4535e3c` implementation baseline. Reproduce
-the lost-confirmation issue by requesting a direct URL, waiting for Confirm,
-then reloading. The current blocked path in `agent/graph.py` skips
-`save_assistant_message`; the frontend only retains the draft in memory.
-Persist approval state, resolve it durably after a decision, and prevent stale
-or duplicate approvals from repeating side effects. Preserve all executor
-checks and avoid introducing checkpoint replay of already-executed tools.
+Iteration 4 reviews tool/search/MCP transport and safety. Keep all execution
+inside `ToolExecutor`, especially search-derived follow-up fetches. Audit the
+current automatic-confirmation behavior of search enrichment against the
+declared tool policy, bound discovery/transport work, and normalize server
+errors consistently in UI/model context/audit records.
 
 The isolated acceptance database is `agent_upgrade_20261015`. Local HTTP model
 and MCP fixtures live under ignored `.local` in the test worktree. The browser

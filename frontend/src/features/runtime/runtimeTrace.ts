@@ -12,7 +12,7 @@ export type DraftMessage = Pick<Message, "role" | "content"> & {
   metadata_?: Record<string, unknown>;
 };
 
-export type ToolStatus = "running" | "success" | "failed" | "timeout" | "blocked" | "cancelled";
+export type ToolStatus = "running" | "success" | "failed" | "timeout" | "blocked" | "cancelled" | "approved";
 export type ConfirmationDecision = "pending" | "confirmed" | "cancelled";
 
 export type ToolTrace = {
@@ -29,6 +29,8 @@ export type ToolTrace = {
   duration_ms?: number;
   trace_id?: string;
   requires_confirmation?: boolean;
+  approval_id?: string;
+  approval_status?: string;
 };
 
 export type ExecutionTrace = {
@@ -78,7 +80,9 @@ export function runtimeStatusLabel(label: string, model?: string): string {
     planning: "Planning next step",
     generating: model ? `Generating answer with ${model}` : "Generating answer",
     save_assistant_message: "Saving answer",
-    update_memory_summary: "Updating memory"
+    update_memory_summary: "Updating memory",
+    saving_confirmation: "Saving tool confirmation",
+    retrieval_timeout: "Context lookup timed out; continuing with available information"
   };
   return labels[label] ?? (model ? `${label}: ${model}` : label);
 }
@@ -238,9 +242,18 @@ function normalizePersistedToolCalls(raw: unknown): ToolTrace[] {
     if (!isRecord(item) || typeof item.tool_name !== "string") return [];
     const result = isRecord(item.result) ? item.result : undefined;
     const status = normalizeToolStatus(result?.status);
+    const approvalId = typeof item.approval_id === "string" ? item.approval_id : undefined;
+    let approvalStatus = typeof item.approval_status === "string" ? item.approval_status : undefined;
+    if (approvalStatus === "pending" && typeof item.approval_expires_at === "string" &&
+        Date.parse(item.approval_expires_at) <= Date.now()) approvalStatus = "expired";
+    const resolved = approvalStatus !== undefined && approvalStatus !== "pending";
+    const resolvedStatus: ToolStatus = approvalStatus === "cancelled" ? "cancelled"
+      : ["approved", "completed"].includes(approvalStatus ?? "") ? "approved" : "failed";
+    const approvalError = typeof item.approval_error === "string" ? item.approval_error
+      : approvalStatus === "expired" ? "Approval expired; send a new request." : null;
     return [
       {
-        id: `${item.tool_name}-${index}`,
+        id: approvalId ?? `${result?.trace_id ?? item.tool_name}-${index}`,
         tool_name: item.tool_name,
         provider: typeof item.provider === "string" ? item.provider : stringFromRecord(result, "provider"),
         provider_tool_id:
@@ -249,14 +262,18 @@ function normalizePersistedToolCalls(raw: unknown): ToolTrace[] {
             : stringFromRecord(result, "provider_tool_id"),
         server_name:
           typeof item.server_name === "string" ? item.server_name : stringFromRecord(result, "server_name"),
-        status: isConfirmationBlock(item, result) ? "blocked" : status,
+        status: resolved ? resolvedStatus : isConfirmationBlock(item, result) ? "blocked" : status,
         arguments: isRecord(item.arguments) ? item.arguments : {},
         reason: typeof item.reason === "string" ? item.reason : undefined,
-        output_summary: typeof result?.output_summary === "string" ? result.output_summary : null,
-        error: typeof result?.error === "string" ? result.error : null,
+        output_summary: ["approved", "completed"].includes(approvalStatus ?? "")
+          ? "Approval consumed. See the continuation and tool history for the execution outcome."
+          : typeof result?.output_summary === "string" ? result.output_summary : null,
+        error: resolved ? approvalError : typeof result?.error === "string" ? result.error : null,
         duration_ms: typeof result?.duration_ms === "number" ? result.duration_ms : undefined,
         trace_id: typeof result?.trace_id === "string" ? result.trace_id : undefined,
-        requires_confirmation: Boolean(item.requires_confirmation)
+        requires_confirmation: !resolved && Boolean(item.requires_confirmation),
+        approval_id: approvalId,
+        approval_status: approvalStatus
       }
     ];
   });

@@ -52,7 +52,18 @@ class FakeSession:
         self.commit_count += 1
 
     async def execute(self, statement):
+        if getattr(statement, "_for_update_arg", None) is not None:
+            return ScalarResult([
+                item for item in reversed(self.items)
+                if isinstance(item, Message) and (item.metadata_ or {}).get("approval")
+            ][:1])
         return ScalarResult(self.history)
+
+    async def rollback(self):
+        pass
+
+    async def refresh(self, item):
+        pass
 
 
 class FakeRag:
@@ -1137,7 +1148,10 @@ async def test_fetch_url_summary_uses_mcp_fetch_instead_of_web_search() -> None:
     assert tool_result["status"] == "failed"
     assert tool_result["error"] == "Tool requires confirmation before execution"
     assert "token" not in [name for name, _ in events]
-    assert assistant_messages(session) == []
+    saved = assistant_messages(session)
+    assert len(saved) == 1 and saved[0].content == ""
+    assert saved[0].metadata_["approval"]["status"] == "pending"
+    assert events[-1][1]["tool_calls"][-1]["approval_id"] == str(saved[0].id)
 
 
 @pytest.mark.asyncio
@@ -1206,7 +1220,9 @@ async def test_github_repo_url_uses_github_mcp_before_fetch() -> None:
     assert tool_call["requires_confirmation"] is True
     assert tool_result["error"] == "Tool requires confirmation before execution"
     assert "token" not in [name for name, _ in events]
-    assert assistant_messages(session) == []
+    saved = assistant_messages(session)
+    assert len(saved) == 1 and saved[0].content == ""
+    assert saved[0].metadata_["approval"]["status"] == "pending"
 
 
 @pytest.mark.asyncio

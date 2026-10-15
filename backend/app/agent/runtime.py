@@ -1,4 +1,6 @@
+import asyncio
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from dataclasses import asdict
 import json
 import logging
@@ -6,10 +8,12 @@ import re
 from urllib.parse import unquote, urlparse
 from uuid import UUID, uuid4
 
+from anyio import move_on_after
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.graph import build_agent_graph
+from app.agent.context_budget import fit_context
 from app.agent.constants import (
     MCP_FETCH_TOOL_NAME,
     MCP_GITHUB_FILE_TOOL_IDS,
@@ -33,6 +37,7 @@ from app.services.model_gateway import ModelGateway
 from app.services.plugin_registry import TOOL_PROVIDER_MCP_SERVER, PluginRegistry
 from app.services.rag import Citation, RagService
 from app.services.tool_executor import ToolExecutor
+from app.services.tool_approvals import ToolApprovalStore
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +174,7 @@ class AgentRuntime(AgentResponsePolicy):
         tool_executor: ToolExecutor | None = None,
         max_tool_rounds: int = 3,
         task_id: UUID | None = None,
+        approval_store: ToolApprovalStore | None = None,
     ) -> None:
         self.session = session
         self.plugin_registry = plugin_registry
@@ -180,6 +186,7 @@ class AgentRuntime(AgentResponsePolicy):
         self.tool_executor = tool_executor or ToolExecutor()
         self.max_tool_rounds = max(max_tool_rounds, 0)
         self.settings = get_settings()
+        self.approvals = approval_store or ToolApprovalStore(session)
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[dict[str, str]]:
         trace_id = uuid4().hex
@@ -205,10 +212,9 @@ class AgentRuntime(AgentResponsePolicy):
             "events": [],
         }
         try:
-            graph = build_agent_graph(self, mode="chat")
-            config = self._graph_config(state)
-            async for event in graph.astream(state, config=config, stream_mode="custom"):
-                yield event
+            async with aclosing(self._run_graph(state, "chat")) as events:
+                async for event in events:
+                    yield event
         except Exception as exc:
             logger.exception("Agent runtime stream failed", extra={"trace_id": trace_id})
             yield self._event(
@@ -216,8 +222,16 @@ class AgentRuntime(AgentResponsePolicy):
             )
 
     async def stream_confirmed_tool(
-        self, request: ToolConfirmationRequest
+        self, request: ToolConfirmationRequest, *, approval: Message | None = None,
     ) -> AsyncIterator[dict[str, str]]:
+        approval = approval or await self.approvals.claim(self.user_id, request)
+        stored = approval.metadata_["approval"]
+        continuation = approval.metadata_.get("continuation", {})
+        request = request.model_copy(update={
+            "message": stored["message"], "tool_name": stored["tool_name"],
+            "arguments": stored["arguments"], "task_type": stored["task_type"],
+            "reason": f"Confirmed: {stored['reason']}",
+        })
         trace_id = uuid4().hex
         state: AgentGraphState = {
             "user_id": self.user_id,
@@ -241,13 +255,20 @@ class AgentRuntime(AgentResponsePolicy):
             "confirmed_tool_name": request.tool_name,
             "confirmed_arguments": request.arguments,
             "confirmed_reason": request.reason,
+            "approval_id": approval.id,
+            **{key: continuation.get(key, []) for key in (
+                "citations", "mcp_resources", "mcp_prompts", "observations", "tool_calls",
+            )},
             "events": [],
         }
+        completed = False
         try:
-            graph = build_agent_graph(self, mode="confirmed_tool")
-            config = self._graph_config(state)
-            async for event in graph.astream(state, config=config, stream_mode="custom"):
-                yield event
+            async with aclosing(self._run_graph(state, "confirmed_tool")) as events:
+                async for event in events:
+                    if event["event"] == "done":
+                        await self.approvals.finish(approval, "completed")
+                        completed = True
+                    yield event
         except Exception as exc:
             logger.exception(
                 "Confirmed agent runtime stream failed", extra={"trace_id": trace_id}
@@ -255,6 +276,30 @@ class AgentRuntime(AgentResponsePolicy):
             yield self._event(
                 "error", {"message": self._exception_message(exc), "trace_id": trace_id}
             )
+        finally:
+            if not completed:
+                try:
+                    # SSE disconnects use level cancellation. Shield bounded DB cleanup
+                    # so the consumed approval can be marked interrupted even then.
+                    with move_on_after(5, shield=True):
+                        await self.approvals.interrupt(approval)
+                except Exception:
+                    # The committed claim still prevents replay even if finalization fails.
+                    logger.exception("Could not finalize interrupted tool approval")
+
+    async def _run_graph(self, state: AgentGraphState, mode) -> AsyncIterator[dict[str, str]]:
+        if len(state["message"]) > self.settings.agent_context_max_chars:
+            raise ValueError("Current message exceeds the runtime context budget")
+        try:
+            async with asyncio.timeout(self.settings.agent_run_timeout_seconds):
+                graph = build_agent_graph(self, mode=mode)
+                async with aclosing(graph.astream(
+                    state, config=self._graph_config(state), stream_mode="custom"
+                )) as stream:
+                    async for event in stream:
+                        yield event
+        except TimeoutError as exc:
+            raise TimeoutError("Agent run exceeded its total time budget") from exc
 
     @staticmethod
     def _exception_message(exc: Exception) -> str:
@@ -285,11 +330,15 @@ class AgentRuntime(AgentResponsePolicy):
         self, state: AgentExecutionState, model_name: str
     ) -> AsyncIterator[str]:
         response_parts: list[str] = []
+        history, context, state.context_budget = fit_context(
+            state.message, state.history, self._answer_context(state),
+            self.settings.agent_context_max_chars,
+        )
         async for token in self.model_gateway.stream_reply(
             model_name=model_name,
             prompt=state.message,
-            context=self._answer_context(state),
-            history=state.history,
+            context=context,
+            history=history,
         ):
             response_parts.append(token)
         raw_answer = "".join(response_parts)
@@ -372,6 +421,8 @@ class AgentRuntime(AgentResponsePolicy):
                 "memory_summaries": state.memory_summaries,
                 "trace_id": state.trace_id,
                 "model_route": asdict(route),
+                "context_budget": state.context_budget,
+                "resolves_approval_id": str(state.approval_id) if state.approval_id else None,
             },
             model_name=route.model_name,
         )
@@ -1332,6 +1383,7 @@ class AgentRuntime(AgentResponsePolicy):
             select(Message)
             .where(Message.conversation_id == conversation_id)
             .where(Message.role.in_(("user", "assistant")))
+            .where(Message.content != "")
             .order_by(Message.created_at.desc())
             .limit(limit)
         )
@@ -1372,9 +1424,10 @@ class AgentRuntime(AgentResponsePolicy):
             select(Message)
             .where(Message.conversation_id == conversation_id)
             .where(Message.role.in_(("user", "assistant")))
+            .where(Message.content != "")
             .order_by(Message.created_at.asc())
         )
-        return [item for item in result.scalars().all() if isinstance(item, Message)]
+        return [item for item in result.scalars().all() if isinstance(item, Message) and item.content]
 
     async def _maybe_update_memory_summary(self, conversation_id: UUID) -> None:
         messages = await self._load_summary_source_messages(conversation_id)

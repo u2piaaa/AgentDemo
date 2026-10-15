@@ -53,7 +53,7 @@ At a high level the runtime does this for each user message:
 2. Load recent user and assistant messages as short-term memory.
 3. Auto-title a new conversation from the first user message.
 4. Persist the new user message.
-5. Retrieve supplemental knowledge with RAG.
+5. Surface direct-URL/tool confirmation early, or retrieve supplemental knowledge with RAG.
 6. Plan whether a tool is needed.
 7. Execute up to the configured tool round limit.
 8. Stream the model response token by token.
@@ -94,11 +94,31 @@ The direct tool endpoint is `POST /api/tools/{tool_name}/run` with:
 ```
 
 The chat runtime first blocks tools that require confirmation and audits that
-blocked attempt. When the user confirms in the frontend, it calls
+blocked attempt. It saves the pending plan and continuation context in an
+assistant trace so confirmation survives a reload or backend restart. When the
+user confirms in the frontend, it calls
 `POST /api/conversations/chat/confirm/stream` with the original message, tool
-name, and arguments. The runtime then executes the confirmed tool, streams a new
+name, arguments, and the server-issued `approval_id`. An owner-bound row lock
+atomically consumes the approval before any tool effect; expired, mismatched,
+cancelled or already-consumed approvals return HTTP 409. Legacy clients without
+an ID must exactly match a pending stored plan.
+
+The runtime restores earlier observations without replaying earlier tools,
+then executes the approved tool through `ToolExecutor`, streams a new
 `tool_call` / `tool_result` / `token` sequence, and persists the continuation
-assistant message.
+assistant message. `POST /api/conversations/chat/confirm/cancel` accepts
+`conversation_id` and `approval_id` and persists cancellation. Interrupted
+continuations remain consumed: inspect tool history before requesting the work
+again, because an external effect may already have completed.
+
+Runtime budgets are configurable in `backend/.env`: `AGENT_RUN_TIMEOUT_SECONDS`
+(180), `AGENT_RETRIEVAL_TIMEOUT_SECONDS` (12), `AGENT_CONTEXT_MAX_CHARS` (48,000)
+and `AGENT_APPROVAL_TTL_SECONDS` (86,400). The character budget includes the
+current request, recent history and supplemental model context; it is not a
+model-specific token estimate. Trimming keeps recent history and tool results,
+records budget diagnostics in message metadata, and never silently truncates
+the current request. A retrieval timeout reports progress and continues with
+available context. A run timeout ends the stream with an error.
 
 ## SSE Events
 
@@ -404,4 +424,4 @@ current modernization sequence, acceptance checks, and release evidence.
 - Schedules currently expose in-app state but do not yet deliver email, desktop,
   or webhook notifications.
 - LangGraph coordinates execution, but durable node-level checkpoint/resume is a
-  future capability beyond the current task-level persistence.
+  future capability beyond the current task and tool-approval persistence.

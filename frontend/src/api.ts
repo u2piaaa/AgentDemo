@@ -283,6 +283,7 @@ export async function streamChat(
 export async function streamConfirmedTool(
   payload: {
     conversationId: string;
+    approvalId?: string;
     message: string;
     toolName: string;
     arguments: Record<string, unknown>;
@@ -295,6 +296,7 @@ export async function streamConfirmedTool(
     headers: jsonAuthHeaders(),
     body: JSON.stringify({
       conversation_id: payload.conversationId,
+      approval_id: payload.approvalId,
       message: payload.message,
       tool_name: payload.toolName,
       arguments: payload.arguments,
@@ -305,6 +307,15 @@ export async function streamConfirmedTool(
   if (!response.body) throw new Error("Failed to continue tool call: empty response body");
 
   await readEventStream(response.body, onEvent);
+}
+
+export async function cancelToolApproval(conversationId: string, approvalId: string): Promise<void> {
+  const response = await fetch("/api/conversations/chat/confirm/cancel", {
+    method: "POST",
+    headers: jsonAuthHeaders(),
+    body: JSON.stringify({ conversation_id: conversationId, approval_id: approvalId })
+  });
+  if (!response.ok) throw new Error(await readError(response, "Failed to cancel tool approval"));
 }
 
 async function readEventStream(
