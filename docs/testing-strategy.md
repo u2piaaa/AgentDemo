@@ -10,11 +10,18 @@ Run all backend tests from the backend directory:
 
 ```powershell
 cd D:\workplace\AgentDemo\backend
+uv sync --locked --extra dev --python 3.12
 .\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing --cov-fail-under=70
+.\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing --cov-fail-under=80
 .\.venv\Scripts\python.exe -m ruff check app tests
 .\.venv\Scripts\python.exe -m app.evals
+.\.venv\Scripts\python.exe -m pip_audit --local --skip-editable
 ```
+
+CI installs from `backend/uv.lock` with `--locked` and checks Python 3.11,
+3.12 and 3.14. The lockfile includes the development extra; CI audits installed
+third-party packages and excludes only this editable local project. Audit
+network errors fail the gate rather than reporting a clean result.
 
 Useful targeted suites:
 

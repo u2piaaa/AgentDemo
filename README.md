@@ -203,6 +203,7 @@ Conversation memory has two layers:
 Prerequisites:
 
 - Python 3.11+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.11.5+ (CI uses 0.13.1)
 - Node.js 20+
 - PostgreSQL 16 with pgvector available
 
@@ -210,10 +211,16 @@ Install backend dependencies:
 
 ```powershell
 cd D:\workplace\AgentDemo\backend
-python -m venv .venv
-.\.venv\Scripts\python -m pip install -e .[dev]
+uv sync --locked --extra dev --python 3.12
 Copy-Item .env.example .env
 ```
+
+`backend/uv.lock` is the reproducible backend dependency baseline. Use
+`uv sync --locked --extra dev` in every worktree; each receives its own ignored
+`.venv`. The `--locked` flag rejects stale dependency metadata. Upgrade packages
+deliberately with `uv lock --upgrade-package <name>`, then run the quality gates
+before committing the lockfile. External MCP servers should use their own
+environment rather than installing untracked packages into the app environment.
 
 This repository can run PostgreSQL from a local binary package without Docker:
 
@@ -252,7 +259,7 @@ Install and start the frontend:
 
 ```powershell
 cd D:\workplace\AgentDemo\frontend
-npm install
+npm ci
 npm run dev
 ```
 
@@ -331,9 +338,10 @@ Backend:
 ```powershell
 cd D:\workplace\AgentDemo\backend
 .\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe -m pytest --cov=app --cov-fail-under=70
+.\.venv\Scripts\python.exe -m pytest --cov=app --cov-fail-under=80
 .\.venv\Scripts\python.exe -m ruff check app tests
 .\.venv\Scripts\python.exe -m app.evals
+.\.venv\Scripts\python.exe -m pip_audit --local --skip-editable
 ```
 
 The deterministic evaluation suite scores tool routing, confirmation policy,
@@ -361,6 +369,9 @@ git diff --check
 See [Testing Strategy](docs/testing-strategy.md) and
 [Final Regression Checklist](docs/final-regression-checklist.md) for the full QA
 handoff checklist.
+
+The [October 2026 module upgrade ledger](docs/upgrade-2026-10.md) records the
+current modernization sequence, acceptance checks, and release evidence.
 
 ## Known Limitations
 
