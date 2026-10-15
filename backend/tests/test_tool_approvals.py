@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, inspect, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models import Conversation, Message, User
@@ -202,4 +202,23 @@ async def test_interruption_never_requeues_consumed_approval(approval_database):
     assert restored.metadata_["approval"]["status"] == "interrupted"
     assert "may already have completed" in restored.metadata_["approval"]["error"]
     with pytest.raises(HTTPException):
+        await claim(approval_database, request)
+
+
+async def test_completion_survives_memory_transaction_rollback(approval_database):
+    request = await create_approval(approval_database)
+    async with approval_database[0]() as session:
+        store = ToolApprovalStore(session)
+        message = await store.claim(approval_database[1], request)
+        # Memory compaction can read and roll back when there is nothing to save.
+        # SQLAlchemy expires every attached object, even with expire_on_commit=False.
+        await session.execute(select(Message).where(Message.id == request.approval_id))
+        await session.rollback()
+        assert "metadata_" in inspect(message).expired_attributes
+        await store.finish(message, "completed")
+    restored = await stored(approval_database, request)
+    assert restored.metadata_["approval"]["status"] == "completed"
+    assert restored.metadata_["tool_calls"][-1]["approval_status"] == "completed"
+    assert restored.metadata_["approval"]["error"] is None
+    with pytest.raises(HTTPException, match="already been resolved"):
         await claim(approval_database, request)

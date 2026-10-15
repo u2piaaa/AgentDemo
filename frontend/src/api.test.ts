@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { cancelToolApproval, parseSseChunk, streamConfirmedTool } from "./api";
+import { cancelToolApproval, parseSseChunk, streamChat, streamConfirmedTool } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -33,6 +33,22 @@ describe("parseSseChunk", () => {
 });
 
 describe("durable approval requests", () => {
+  it("reports a truncated stream rather than treating it as a finished answer", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('event: token\ndata: {"text":"partial"}\n\n')));
+    const received = vi.fn();
+    await expect(streamChat("hello", "c1", received)).rejects.toThrow("Connection ended before completion");
+    expect(received).toHaveBeenCalledWith({ event: "token", data: { text: "partial" } });
+  });
+
+  it("propagates explicit stream cancellation to the transport", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('event: done\ndata: {"conversation_id":"c1"}\n\n'));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    await streamChat("hello", "c1", () => {}, controller.signal);
+    controller.abort();
+    expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(true);
+  });
+
   it("sends the server approval ID with confirmation", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('event: done\ndata: {"conversation_id":"c1"}\n\n'));
     vi.stubGlobal("fetch", fetchMock);

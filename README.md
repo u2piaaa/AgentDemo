@@ -9,6 +9,11 @@ it persists conversation state, retrieves relevant knowledge, plans tool calls,
 runs local plugins through an auditable executor, streams events over SSE, and
 saves the final assistant message with trace metadata.
 
+The [conversation workspace](docs/frontend-workspace.md) uses a Claude-inspired
+warm visual style, safe Markdown answers, cancellable streams and responsive
+runtime drawers. The [upgrade ledger](docs/upgrade-2026-10.md) records each
+module's implementation and acceptance evidence.
+
 ## Repository Layout
 
 - `backend/app/main.py`: FastAPI application startup, route mounting, scheduler
@@ -305,7 +310,7 @@ Prerequisites:
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.11.5+ (CI uses 0.13.1)
-- Node.js 20+
+- Node.js 24 LTS recommended (minimum 22.12; required by Vite 8)
 - PostgreSQL 16 with pgvector available
 
 Install backend dependencies:

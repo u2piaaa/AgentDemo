@@ -117,6 +117,9 @@ class ToolApprovalStore:
             raise HTTPException(status_code=409, detail="Tool approval expired; send a new request")
 
     async def finish(self, message: Message, status: str, error: str | None = None) -> None:
+        # Memory compaction may roll back a read transaction and expire attached
+        # objects. Reload explicitly; attribute access cannot perform async IO.
+        await self.session.refresh(message)
         metadata = deepcopy(message.metadata_)
         metadata["approval"].update({
             "status": status, "updated_at": datetime.now(UTC).isoformat(), "error": error,

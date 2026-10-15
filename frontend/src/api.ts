@@ -316,9 +316,11 @@ export async function runTaskScheduleNow(scheduleId: string): Promise<Task> {
 export async function streamChat(
   message: string,
   conversationId: string | null,
-  onEvent: (event: StreamEvent) => void
+  onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const response = await request("/api/conversations/chat/stream", {
+    signal,
     method: "POST",
     headers: jsonAuthHeaders(),
     body: JSON.stringify({ message, conversation_id: conversationId })
@@ -338,9 +340,11 @@ export async function streamConfirmedTool(
     arguments: Record<string, unknown>;
     reason?: string;
   },
-  onEvent: (event: StreamEvent) => void
+  onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const response = await request("/api/conversations/chat/confirm/stream", {
+    signal,
     method: "POST",
     headers: jsonAuthHeaders(),
     body: JSON.stringify({
@@ -374,19 +378,26 @@ async function readEventStream(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let terminalEvent = false;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-    const normalized = buffer.replace(/\r\n/g, "\n");
-    const chunks = normalized.split("\n\n");
-    buffer = done ? "" : chunks.pop() ?? "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+      const normalized = buffer.replace(/\r\n/g, "\n");
+      const chunks = normalized.split("\n\n");
+      buffer = done ? "" : chunks.pop() ?? "";
 
-    for (const event of chunks.flatMap(parseSseChunk)) {
-      onEvent(event);
+      for (const event of chunks.flatMap(parseSseChunk)) {
+        if (event.event === "done" || event.event === "error") terminalEvent = true;
+        onEvent(event);
+      }
+      if (done) break;
     }
-    if (done) break;
+  } finally {
+    reader.releaseLock();
   }
+  if (!terminalEvent) throw new Error("Connection ended before completion. Check this conversation before retrying.");
 }
 
 export function parseSseChunk(chunk: string): StreamEvent[] {

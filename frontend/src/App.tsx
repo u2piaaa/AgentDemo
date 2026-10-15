@@ -1,6 +1,9 @@
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
+  Asterisk,
+  ArrowDown,
+  ArrowUp,
   AlertCircle,
   BookOpen,
   Bot,
@@ -21,7 +24,7 @@ import {
   Moon,
   PauseCircle,
   Search,
-  Send,
+  Square,
   Settings2,
   Sparkles,
   Sun,
@@ -67,6 +70,11 @@ import {
   updateConversationTitle,
   uploadDocument
 } from "./api";
+import { CopyButton, MessageContent } from "./features/chat/MessageContent";
+import { useModalLayer } from "./lib/useModalLayer";
+import { useMediaQuery } from "./lib/useMediaQuery";
+import { StreamScope } from "./lib/streamScope";
+import { readBrowserStorage, writeBrowserStorage } from "./lib/browserStorage";
 import { TaskList } from "./features/tasks/TaskList";
 import { DocumentCard } from "./features/knowledge/DocumentCard";
 import { ScheduleComposer } from "./features/tasks/ScheduleComposer";
@@ -139,7 +147,7 @@ const QUICK_PROMPTS = [
 
 function initialTheme(): Theme {
   if (typeof window === "undefined") return "light";
-  const stored = window.localStorage.getItem("agentdemo-theme");
+    const stored = readBrowserStorage("agentdemo-theme");
   if (stored === "light" || stored === "dark") return stored;
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
@@ -189,6 +197,7 @@ export function App() {
     () => new Set()
   );
   const [uploadStatus, setUploadStatus] = useState("No document uploaded in this chat.");
+  const [uploadError, setUploadError] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
@@ -205,11 +214,30 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const taskStatusRef = useRef<Record<string, string>>({});
+  const streamScope = useRef(new StreamScope());
+  const streamStopped = useRef(false);
+  const followLatest = useRef(true);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [isCreatingConversation, setIsCreatingConversation] = useState(false);
+  const compactLayout = useMediaQuery("(max-width: 1100px)");
+  const sidebarRef = useModalLayer<HTMLElement>(compactLayout && isSidebarOpen, () => setIsSidebarOpen(false));
+  const inspectorRef = useModalLayer<HTMLElement>(compactLayout && isInspectorOpen, () => setIsInspectorOpen(false), ".mobile-inspector-button");
+  const deleteDialogRef = useModalLayer<HTMLDivElement>(Boolean(conversationToDelete), () => setConversationToDelete(null));
+  const conversationFilter = useDeferredValue(conversationQuery);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    window.localStorage.setItem("agentdemo-theme", theme);
+    writeBrowserStorage("agentdemo-theme", theme);
   }, [theme]);
+
+  useEffect(() => () => streamScope.current.invalidate(), []);
+
+  useEffect(() => {
+    const area = textareaRef.current;
+    if (!area) return;
+    area.style.height = "auto";
+    area.style.height = `${Math.min(area.scrollHeight, 200)}px`;
+  }, [input, currentUser]);
 
   useEffect(() => {
     let active = true;
@@ -322,7 +350,7 @@ export function App() {
   }
 
   useEffect(() => {
-    if (isStreaming) {
+    if (isStreaming || streamStopped.current) {
       return;
     }
     if (!activeConversationId) {
@@ -386,11 +414,11 @@ export function App() {
     }));
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const list = messageListRef.current;
     if (!list) return;
-    list.scrollTop = list.scrollHeight;
-  }, [messages]);
+    if (followLatest.current) list.scrollTop = list.scrollHeight;
+  }, [messages, executionTraces]);
 
   useEffect(() => {
     if (!currentUser || !activeConversationId) {
@@ -459,12 +487,12 @@ export function App() {
   );
 
   const filteredConversations = useMemo(() => {
-    const query = conversationQuery.trim().toLocaleLowerCase();
+    const query = conversationFilter.trim().toLocaleLowerCase();
     if (!query) return conversations;
     return conversations.filter((conversation) =>
       conversation.title.toLocaleLowerCase().includes(query)
     );
-  }, [conversationQuery, conversations]);
+  }, [conversationFilter, conversations]);
 
   const toolHistory = useMemo(() => {
     const fromMessages = messages.flatMap((message) => traceFromMessage(message)?.toolCalls ?? []);
@@ -484,6 +512,12 @@ export function App() {
   }, [activeConversation?.id, activeConversation?.title]);
 
   async function handleNewConversation() {
+    if (isCreatingConversation) return;
+    setIsCreatingConversation(true);
+    streamScope.current.invalidate();
+    streamStopped.current = false;
+    setIsStreaming(false);
+    try {
     const conversation = await createConversation();
     setConversations((current) => [conversation, ...current]);
     setActiveConversationId(conversation.id);
@@ -496,10 +530,30 @@ export function App() {
     setExecutionTraces({});
     setConfirmationDecisions({});
     setUploadStatus("No document uploaded in this chat.");
+    setUploadError("");
     setIsSidebarOpen(false);
+    followLatest.current = true;
+    setShowJumpToLatest(false);
+    setInput("");
+    setStatus("Ready");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not create conversation");
+    } finally {
+      setIsCreatingConversation(false);
+    }
   }
 
   function handleSelectConversation(conversationId: string) {
+    if (conversationId !== activeConversationId) {
+      streamScope.current.invalidate();
+      streamStopped.current = false;
+      setIsStreaming(false);
+      setMessages([]);
+      setUploadError("");
+      followLatest.current = true;
+      setShowJumpToLatest(false);
+      setStatus("Ready");
+    }
     setActiveConversationId(conversationId);
     setIsSidebarOpen(false);
   }
@@ -573,6 +627,11 @@ export function App() {
   }
 
   function resetWorkspace() {
+    setUploadError("");
+    streamScope.current.invalidate();
+    streamStopped.current = false;
+    followLatest.current = true;
+    setShowJumpToLatest(false);
     clearAuthToken();
     setCurrentUser(null);
     setConversations([]);
@@ -810,6 +869,9 @@ export function App() {
       return;
     }
 
+    const run = streamScope.current.begin();
+    streamStopped.current = false;
+    followLatest.current = true;
     pendingConfirmationConversationRef.current = null;
     const assistantMessageId = makeClientId("assistant-confirmed");
     setConfirmationDecisions((current) => ({ ...current, [tool.id]: "confirmed" }));
@@ -833,25 +895,28 @@ export function App() {
           arguments: tool.arguments,
           reason: tool.reason ? `Confirmed: ${tool.reason}` : `Confirmed ${tool.tool_name}.`
         },
-        (event) => handleRuntimeEvent(assistantMessageId, event)
+        (event) => handleRuntimeEvent(assistantMessageId, event, run.version), run.signal
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to continue tool call";
+      if (!streamScope.current.isCurrent(run.version)) return;
+      streamStopped.current = run.signal.aborted;
+      const message = run.signal.aborted ? "Generation stopped" : error instanceof Error ? error.message : "Failed to continue tool call";
       setStatus(message);
       updateExecutionTrace(assistantMessageId, (trace) => ({ ...trace, error: message }));
       setMessages((current) =>
         current.map((item) =>
           item.id === assistantMessageId && !item.content
-            ? { ...item, content: `Request failed: ${message}` }
+            ? { ...item, content: run.signal.aborted ? message : `Request failed: ${message}` }
             : item
         )
       );
     } finally {
-      setIsStreaming(false);
+      if (streamScope.current.isCurrent(run.version)) setIsStreaming(false);
     }
   }
 
-  function handleRuntimeEvent(assistantMessageId: string, event: StreamEvent) {
+  function handleRuntimeEvent(assistantMessageId: string, event: StreamEvent, version: number) {
+    if (!streamScope.current.isCurrent(version)) return;
     if (event.event === "status") {
       const label = runtimeStatusLabel(event.data.label, event.data.model);
       setStatus(label);
@@ -923,14 +988,17 @@ export function App() {
       setStatus(awaitingConfirmation ? "Waiting for tool confirmation" : "Done");
       pendingConfirmationConversationRef.current = awaitingConfirmation ? conversationId : null;
       void getConversations().then(async (items) => {
+        if (!streamScope.current.isCurrent(version)) return;
         setConversations(items);
         const loadedDocuments = await getDocuments(conversationId);
+        if (!streamScope.current.isCurrent(version)) return;
         if (awaitingConfirmation) {
           setDocuments(loadedDocuments);
-          void getTasks(conversationId).then(setTasks).catch(() => undefined);
+          void getTasks(conversationId).then((items) => { if (streamScope.current.isCurrent(version)) setTasks(items); }).catch(() => undefined);
           return;
         }
         const loadedMessages = await getMessages(conversationId);
+        if (!streamScope.current.isCurrent(version)) return;
         const persistedAssistant = [...loadedMessages].reverse().find((message) => message.role === "assistant");
         if (persistedAssistant) {
           const finalTrace = hasVisibleTraceSteps(liveTrace) ? liveTrace : traceFromDoneEvent(event.data);
@@ -942,7 +1010,9 @@ export function App() {
         }
         setMessages(loadedMessages);
         setDocuments(loadedDocuments);
-        void getTasks(conversationId).then(setTasks).catch(() => undefined);
+        void getTasks(conversationId).then((items) => { if (streamScope.current.isCurrent(version)) setTasks(items); }).catch(() => undefined);
+      }).catch((error) => {
+        if (streamScope.current.isCurrent(version)) setStatus(error instanceof Error ? error.message : "Could not refresh conversation");
       });
     }
   }
@@ -951,6 +1021,10 @@ export function App() {
     event.preventDefault();
     const text = input.trim();
     if (!text || isStreaming) return;
+    const run = streamScope.current.begin();
+    streamStopped.current = false;
+    followLatest.current = true;
+    setShowJumpToLatest(false);
 
     const assistantMessageId = makeClientId("assistant");
     setInput("");
@@ -967,20 +1041,22 @@ export function App() {
     ]);
 
     try {
-      await streamChat(text, activeConversationId, (event) => handleRuntimeEvent(assistantMessageId, event));
+      await streamChat(text, activeConversationId, (event) => handleRuntimeEvent(assistantMessageId, event, run.version), run.signal);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Request failed";
+      if (!streamScope.current.isCurrent(run.version)) return;
+      streamStopped.current = run.signal.aborted;
+      const message = run.signal.aborted ? "Generation stopped" : error instanceof Error ? error.message : "Request failed";
       setStatus(message);
       updateExecutionTrace(assistantMessageId, (trace) => ({ ...trace, error: message }));
       setMessages((current) =>
         current.map((item) =>
           item.id === assistantMessageId && !item.content
-            ? { ...item, content: `Request failed: ${message}` }
+            ? { ...item, content: run.signal.aborted ? message : `Request failed: ${message}` }
             : item
         )
       );
     } finally {
-      setIsStreaming(false);
+      if (streamScope.current.isCurrent(run.version)) setIsStreaming(false);
     }
   }
 
@@ -1008,8 +1084,9 @@ export function App() {
   }
 
   async function handleUploadDocument(file: File | undefined) {
-    if (!file || isUploading) return;
+    if (!file || isUploading || isStreaming) return;
     setIsUploading(true);
+    setUploadError("");
     setUploadStatus(`Uploading ${file.name}...`);
     try {
       let conversationId = activeConversationId;
@@ -1030,7 +1107,7 @@ export function App() {
       setUploadStatus(`${document.title} is ready in this chat.`);
       setStatus("Document indexed");
     } catch (error) {
-      setUploadStatus(error instanceof Error ? error.message : "Document upload failed");
+      setUploadError(error instanceof Error ? error.message : "Document upload failed");
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) {
@@ -1042,9 +1119,16 @@ export function App() {
   function renderExecutionTrace(message: DraftMessage) {
     const trace = executionTraces[message.id] ?? traceFromMessage(message);
     if (!hasVisibleTraceSteps(trace ?? undefined)) return null;
+    const needsApproval = trace?.toolCalls.some((tool) => tool.requires_confirmation && tool.status === "blocked"
+      && !["cancelled", "confirmed"].includes(confirmationDecisions[tool.id] ?? ""));
 
     return (
-      <div className="execution-trace" aria-label="Agent execution steps">
+      <details className="execution-trace" aria-label="Agent execution steps"
+        open={Boolean(needsApproval) || Boolean(trace?.error) || !message.content}>
+        <summary><Activity size={15} aria-hidden="true" /><span>
+          {needsApproval ? "Permission needed" : trace?.error ? "Run interrupted" : "View agent activity"}
+        </span><span className="trace-count">{trace?.toolCalls.length || ""}</span></summary>
+        <div className="execution-trace-body">
         {trace?.statuses?.map((label, index) => (
           <div className="execution-step status-step" key={`${label}-${index}`}>
             <CircleDot size={15} aria-hidden="true" />
@@ -1076,16 +1160,8 @@ export function App() {
             </div>
           </div>
         ) : null}
-        {message.content ? (
-          <div className="execution-step final-step">
-            <CheckCircle2 size={15} aria-hidden="true" />
-            <div>
-              <strong>Final answer</strong>
-              <p>Streaming response delivered below.</p>
-            </div>
-          </div>
-        ) : null}
-      </div>
+        </div>
+      </details>
     );
   }
 
@@ -1257,14 +1333,17 @@ export function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={isInspectorOpen ? "app-shell inspector-visible" : "app-shell"}>
       <a className="skip-link" href="#chat-input">Skip to message composer</a>
-      <aside className={isSidebarOpen ? "sidebar mobile-open" : "sidebar"} aria-label="Conversations">
+      <aside ref={sidebarRef} className={isSidebarOpen ? "sidebar mobile-open" : "sidebar"} aria-label="Conversations"
+        role={compactLayout && isSidebarOpen ? "dialog" : undefined}
+        aria-modal={compactLayout && isSidebarOpen ? true : undefined}
+        inert={Boolean(conversationToDelete) || (compactLayout && !isSidebarOpen)}>
         <div className="brand">
-          <div className="brand-mark"><Bot size={22} aria-hidden="true" /></div>
+          <div className="brand-mark"><Asterisk size={29} strokeWidth={1.8} aria-hidden="true" /></div>
           <div>
-            <h1>Personal Agent</h1>
-            <p>Intelligence workspace</p>
+            <h1>AgentDemo</h1>
+            <p>Your thinking space</p>
           </div>
           <button
             className="icon-button sidebar-close"
@@ -1276,7 +1355,7 @@ export function App() {
             <X size={18} aria-hidden="true" />
           </button>
         </div>
-        <button className="primary-action new-chat-action" onClick={handleNewConversation}>
+        <button className="primary-action new-chat-action" onClick={handleNewConversation} disabled={isCreatingConversation}>
           <MessageSquarePlus size={18} aria-hidden="true" />
           New chat
         </button>
@@ -1303,7 +1382,9 @@ export function App() {
               className={conversation.id === activeConversationId ? "conversation active" : "conversation"}
               key={conversation.id}
             >
-              <button className="conversation-select" onClick={() => handleSelectConversation(conversation.id)}>
+              <button className="conversation-select" title={conversation.title}
+                aria-current={conversation.id === activeConversationId ? "page" : undefined}
+                onClick={() => handleSelectConversation(conversation.id)}>
                 <MessageSquare size={16} aria-hidden="true" />
                 <span>{conversation.title}</span>
               </button>
@@ -1321,6 +1402,10 @@ export function App() {
           ))}
         </nav>
         <div className="sidebar-footer">
+          <button className="sidebar-logout sidebar-theme" type="button" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}>
+            {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+            {theme === "dark" ? "Light appearance" : "Dark appearance"}
+          </button>
           <div className="user-chip" title={`Signed in as ${currentUser.username}`}>
             <UserIcon size={17} aria-hidden="true" />
             <div><span>Signed in as</span><strong>{currentUser.username}</strong></div>
@@ -1333,8 +1418,9 @@ export function App() {
         </div>
       </aside>
 
-      <section className="workspace" aria-label="Chat workspace">
-        <header className="topbar">
+      <section className="workspace" aria-label="Chat workspace"
+        inert={Boolean(conversationToDelete)}>
+        <header className="topbar" inert={compactLayout && (isSidebarOpen || isInspectorOpen)}>
           <button
             className="icon-button mobile-menu-button"
             type="button"
@@ -1348,7 +1434,6 @@ export function App() {
             <Menu size={20} aria-hidden="true" />
           </button>
           <div className="conversation-heading">
-            <p className="eyebrow">Workspace <span aria-hidden="true">/</span> Conversation</p>
             {isEditingTitle ? (
               <form className="title-editor" onSubmit={handleSaveTitle}>
                 <input
@@ -1404,14 +1489,16 @@ export function App() {
             <button
               className="icon-button mobile-inspector-button"
               type="button"
-              aria-label="Open runtime details"
-              title="Open runtime details"
+              aria-label={isInspectorOpen ? "Close runtime details" : "Open runtime details"}
+              title="Runtime, sources and tools"
+              aria-expanded={isInspectorOpen}
               onClick={() => {
                 setIsSidebarOpen(false);
-                setIsInspectorOpen(true);
+                setIsInspectorOpen((current) => !current);
               }}
             >
               <Settings2 size={18} aria-hidden="true" />
+              <span className="runtime-button-label">Details</span>
             </button>
             <div className={isStreaming ? "runtime-state working" : "runtime-state"} aria-live="polite">
               {isStreaming ? <Loader2 className="spin" size={16} aria-hidden="true" /> : <CircleDot size={16} />}
@@ -1421,14 +1508,19 @@ export function App() {
         </header>
 
         <div className="content-grid">
-          <section className="chat-panel" aria-label="Messages">
-            <div className="message-list" ref={messageListRef}>
+          <section className="chat-panel" aria-label="Messages" inert={compactLayout && (isSidebarOpen || isInspectorOpen)}>
+            <div className="message-list" ref={messageListRef} onScroll={(event) => {
+              const list = event.currentTarget;
+              const nearEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+              followLatest.current = nearEnd;
+              setShowJumpToLatest(!nearEnd);
+            }}>
               {messages.length === 0 ? (
                 <div className="empty-state">
-                  <div className="empty-state-mark"><Sparkles size={24} aria-hidden="true" /></div>
-                  <p className="eyebrow">Ready when you are</p>
-                  <h3>What should we move forward?</h3>
-                  <p>Ask a question, delegate a background task, or turn a useful prompt into a recurring workflow.</p>
+                  <div className="empty-state-mark"><Asterisk size={52} strokeWidth={1.4} aria-hidden="true" /></div>
+                  <p className="eyebrow">A little space to think</p>
+                  <h3>What would you like<br />to work on?</h3>
+                  <p>Bring a question, a document, or an idea.<br />We’ll take it from here, together.</p>
                   <div className="quick-prompts" aria-label="Suggested prompts">
                     {QUICK_PROMPTS.map((item, index) => (
                       <button
@@ -1448,16 +1540,26 @@ export function App() {
                   <article className={`message ${message.role}`} key={message.id}>
                     <div className="message-header">
                       <span className="message-avatar" aria-hidden="true">
-                        {message.role === "assistant" ? <Bot size={15} /> : <UserIcon size={15} />}
+                        {message.role === "assistant" ? <Asterisk size={23} /> : <UserIcon size={15} />}
                       </span>
-                      <div className="message-role">{message.role === "assistant" ? "Personal Agent" : "You"}</div>
+                      <div className="message-role">{message.role === "assistant" ? "Agent" : "You"}</div>
                     </div>
                     {message.role === "assistant" ? renderExecutionTrace(message) : null}
-                    {message.content ? <p>{message.content}</p> : null}
+                    {message.content ? message.role === "assistant"
+                      ? <MessageContent text={message.content} />
+                      : <p className="user-message-text">{message.content}</p> : null}
+                    {message.role === "assistant" && message.content && !isStreaming
+                      ? <div className="message-actions"><CopyButton text={message.content} /></div> : null}
                   </article>
                 ))
               )}
             </div>
+            {showJumpToLatest && <button className="jump-latest" type="button" onClick={() => {
+              followLatest.current = true;
+              if (messageListRef.current) messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
+              setShowJumpToLatest(false);
+            }}><ArrowDown size={16} /> Latest</button>}
+            {isStreaming && <div className="stream-status" role="status"><Loader2 className="spin" size={14} />{status}</div>}
             <form className="composer" onSubmit={handleSubmit}>
               <label className="sr-only" htmlFor="chat-input">Message</label>
               <div className="composer-input-shell">
@@ -1467,12 +1569,11 @@ export function App() {
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
                   onKeyDown={handleComposerKeyDown}
-                  placeholder="Ask the agent to plan, research, use tools, or build a workflow..."
-                  rows={3}
+                  placeholder="How can I help you today?"
+                  rows={2}
                 />
                 <div className="composer-hint" aria-hidden="true">
                   <span>Enter to send · Shift + Enter for a new line</span>
-                  <span>{input.length}</span>
                 </div>
               </div>
               <ScheduleComposer
@@ -1489,6 +1590,7 @@ export function App() {
                     ref={fileInputRef}
                     id="document-upload"
                     type="file"
+                    disabled={isUploading || isStreaming}
                     accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf"
                     onChange={(event) => handleUploadDocument(event.target.files?.[0])}
                   />
@@ -1496,7 +1598,6 @@ export function App() {
                     <FileUp size={18} aria-hidden="true" />
                     {isUploading ? "Indexing..." : "Attach"}
                   </label>
-                  <span aria-live="polite">{uploadStatus}</span>
                 </div>
                 <div className="composer-actions">
                   <button
@@ -1522,20 +1623,31 @@ export function App() {
                     )}
                     {isCreatingTask ? "Queueing" : "Background"}
                   </button>
-                  <button className="send-button" disabled={isStreaming || isCreatingTask || !input.trim()}>
-                    <Send size={18} aria-hidden="true" />
-                    Send
-                  </button>
+                  {isStreaming ? <button className="send-button stop-button" type="button" aria-label="Stop generating"
+                    title="Stop generating" onClick={() => streamScope.current.stop()}><Square size={17} fill="currentColor" /></button>
+                    : <button className="send-button" aria-label="Send" title="Send message" disabled={isCreatingTask || !input.trim()}>
+                      <ArrowUp size={21} aria-hidden="true" />
+                    </button>}
                 </div>
               </div>
+              <div className="composer-footer">
+                <span role="status">{isUploading ? uploadStatus : documents.length ? `${documents.length} document${documents.length === 1 ? "" : "s"} attached` : "Your workspace, your context."}</span>
+                {(documents.length > 0 || citations.length > 0) && <button className="text-link" type="button" onClick={() => {
+                  setInspectorTab("context"); setIsInspectorOpen(true); setIsSidebarOpen(false);
+                }}>View sources <BookOpen size={14} /></button>}
+              </div>
+              {uploadError ? <p className="inline-error" role="alert">{uploadError}</p> : null}
             </form>
           </section>
 
-          <aside className={isInspectorOpen ? "inspector mobile-open" : "inspector"} aria-label="Runtime inspector">
+          <aside ref={inspectorRef} className={isInspectorOpen ? "inspector mobile-open" : "inspector"} aria-label="Runtime inspector"
+            role={compactLayout && isInspectorOpen ? "dialog" : undefined}
+            aria-modal={compactLayout && isInspectorOpen ? true : undefined}
+            inert={!isInspectorOpen || Boolean(conversationToDelete)}>
             <div className="inspector-header">
               <div>
-                <p className="eyebrow">Control center</p>
-                <h2>Agent runtime</h2>
+                <p className="eyebrow">Behind the conversation</p>
+                <h2>Workspace details</h2>
               </div>
               <button
                 className="icon-button inspector-close"
@@ -1552,12 +1664,11 @@ export function App() {
               <div><span>Tasks</span><strong>{tasks.length}</strong></div>
               <div><span>Tools</span><strong>{tools.length}</strong></div>
             </div>
-            <div className="inspector-tabs" role="tablist" aria-label="Runtime views">
+            <div className="inspector-tabs" role="group" aria-label="Runtime views">
               <button
                 className={inspectorTab === "activity" ? "active" : ""}
                 type="button"
-                role="tab"
-                aria-selected={inspectorTab === "activity"}
+                aria-pressed={inspectorTab === "activity"}
                 onClick={() => setInspectorTab("activity")}
               >
                 <Activity size={16} aria-hidden="true" /> Activity
@@ -1565,8 +1676,7 @@ export function App() {
               <button
                 className={inspectorTab === "context" ? "active" : ""}
                 type="button"
-                role="tab"
-                aria-selected={inspectorTab === "context"}
+                aria-pressed={inspectorTab === "context"}
                 onClick={() => setInspectorTab("context")}
               >
                 <BookOpen size={16} aria-hidden="true" /> Context
@@ -1574,8 +1684,7 @@ export function App() {
               <button
                 className={inspectorTab === "tools" ? "active" : ""}
                 type="button"
-                role="tab"
-                aria-selected={inspectorTab === "tools"}
+                aria-pressed={inspectorTab === "tools"}
                 onClick={() => setInspectorTab("tools")}
               >
                 <Wrench size={16} aria-hidden="true" /> Tools
@@ -1797,7 +1906,7 @@ export function App() {
       ) : null}
       {conversationToDelete ? (
         <div className="confirm-backdrop" role="presentation">
-          <div
+          <div ref={deleteDialogRef}
             className="confirm-dialog"
             role="dialog"
             aria-modal="true"

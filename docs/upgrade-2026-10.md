@@ -27,7 +27,7 @@ and audit boundary remain compatibility requirements.
 | 5 | RAG and memory | Context-enriched chunks, hybrid RRF, diversity selection and current listwise reranker integration; reliable incremental memory | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Released: `4964e5c` |
 | 6 | Background tasks and schedules | Fenced workers, replay barriers, deadlines, bounded queues, non-overlapping schedules and DST policy | 389 backend tests; real PostgreSQL competition/recovery; desktop/mobile task and schedule flow | Released: `336f760` |
 | 7 | Authentication and API operations | Argon2id migration, expiring/revocable sessions, shared admission limits, resilient login and bounded readiness | 416 backend tests; PostgreSQL concurrency/migrations; real browser registration, logout, expiry and outage recovery | Released: `3d42d8c` |
-| 8 | Frontend workspace | Claude-inspired warm neutral visual system, simpler sidebar/composer and dialogue typography; current React/Vite, resilient streaming and accessible responsive task/runtime controls | Unit tests/build/audit; desktop/mobile browser chat, tools and inspector | Planned |
+| 8 | Frontend workspace | Claude-inspired warm neutral visual system, simpler sidebar/composer and dialogue typography; current React/Vite, resilient streaming and accessible responsive task/runtime controls | 38 frontend tests/build/audit; 417 backend tests; desktop/mobile browser chat, tools and inspector | Local acceptance passed; release pending |
 | 9 | Integration and release | Reconcile docs/config/migrations and validate the combined app | Full quality gates, migrations, browser acceptance, both remote branches and live process verification | Planned |
 
 Each module gets a substantive, measured improvement. Preview features and
@@ -357,3 +357,34 @@ passed Python 3.11/3.12/3.14, PostgreSQL migration/integration tests, frontend
 checks and dependency audits. Concurrent admission now uses PostgreSQL time
 after CI exposed an elapsed-time race in an earlier application-clock version.
 Implementation `3d42d8c` is released through `test` to `run` with this ledger.
+
+## Iteration 8 — conversation workspace
+
+Rebuilt the visual system in warm light/dark themes with a quieter sidebar,
+serif answer typography, centered reading column, a compact composer and optional
+Details. Runtime, citations, reindexing, tasks, schedules and MCP remain available.
+Markdown answers now have safe links, code/table formatting and copy controls.
+Mobile drawers contain focus and restore it on dismissal; short-screen forms
+scroll within the workspace. Reduced motion, IME input and safe areas are handled.
+
+Upgraded to React 19.3.1, Vite 8.3.4 and TypeScript 7.0.2 with a Node 24 CI runtime.
+Added request cancellation, stale-stream guards, readable stop/EOF states and
+reading-position preservation. The full behavior and limits are documented in
+[Conversation workspace](frontend-workspace.md).
+
+Local acceptance on 2026-10-15:
+
+- 38 frontend tests and production build pass. npm dependency resolution is
+  consistent and audit reports no known vulnerabilities.
+- 417 backend tests pass, one paid live test deselected; coverage 86.27%.
+  Ruff and 12/12 deterministic agent evaluations pass.
+- Real browser checks include formatted answers/code copy, light/dark themes,
+  restored pending approval, confirmed MCP execution and saved final answer,
+  stopping generation, background completion, sources, tasks and schedules.
+- Desktop 1440x900, mobile 375x812 and 320x640, and landscape 812x375 were checked.
+  Drawers trap focus, Escape restores it, and short schedule forms remain reachable.
+- Browser acceptance caught a completion-status error after memory transaction
+  rollback. The PostgreSQL regression failed before the explicit approval refresh
+  fix and passes afterwards; confirmed tools no longer report false interruption.
+- Acceptance uses isolated ports 8001/5174, synthetic credentials and labelled
+  model/MCP fixtures. Stable runtime startup remains part of iteration 9.
