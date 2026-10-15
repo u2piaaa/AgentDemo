@@ -27,8 +27,8 @@ and audit boundary remain compatibility requirements.
 | 5 | RAG and memory | Context-enriched chunks, hybrid RRF, diversity selection and current listwise reranker integration; reliable incremental memory | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Released: `4964e5c` |
 | 6 | Background tasks and schedules | Fenced workers, replay barriers, deadlines, bounded queues, non-overlapping schedules and DST policy | 389 backend tests; real PostgreSQL competition/recovery; desktop/mobile task and schedule flow | Released: `336f760` |
 | 7 | Authentication and API operations | Argon2id migration, expiring/revocable sessions, shared admission limits, resilient login and bounded readiness | 416 backend tests; PostgreSQL concurrency/migrations; real browser registration, logout, expiry and outage recovery | Released: `3d42d8c` |
-| 8 | Frontend workspace | Claude-inspired warm neutral visual system, simpler sidebar/composer and dialogue typography; current React/Vite, resilient streaming and accessible responsive task/runtime controls | 38 frontend tests/build/audit; 417 backend tests; desktop/mobile browser chat, tools and inspector | Local acceptance passed; release pending |
-| 9 | Integration and release | Reconcile docs/config/migrations and validate the combined app | Full quality gates, migrations, browser acceptance, both remote branches and live process verification | Planned |
+| 8 | Frontend workspace | Claude-inspired warm neutral visual system, simpler sidebar/composer and dialogue typography; current React/Vite, resilient streaming and accessible responsive task/runtime controls | 38 frontend tests/build/audit; 417 backend tests; desktop/mobile browser chat, tools and inspector | Released: `770a664` |
+| 9 | Integration and release | Reconcile docs/config/migrations and validate the combined app | Full quality gates, migrations, browser acceptance, both remote branches and live process verification | Final acceptance in progress |
 
 Each module gets a substantive, measured improvement. Preview features and
 infrastructure migrations are adopted only when they solve an observed need
@@ -388,3 +388,8 @@ Local acceptance on 2026-10-15:
   fix and passes afterwards; confirmed tools no longer report false interruption.
 - Acceptance uses isolated ports 8001/5174, synthetic credentials and labelled
   model/MCP fixtures. Stable runtime startup remains part of iteration 9.
+
+[Implementation CI 38725705545](https://github.com/u2piaaa/AgentDemo/actions/runs/38725705545)
+and [stable CI 38725923927](https://github.com/u2piaaa/AgentDemo/actions/runs/38725923927)
+passed all matrix checks. Implementation `770a664` was released through `test`
+to `run`; the stable frontend was installed from the lockfile and built with Node 24.

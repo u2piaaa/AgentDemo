@@ -505,18 +505,18 @@ class AgentRuntime(AgentResponsePolicy):
         return AgentToolPlan(no_tool=True, reason="No tool is needed for this message.")
 
     def _plan_early_confirmable_tool(self, state: AgentExecutionState) -> AgentToolPlan | None:
-        if (
-            self._extract_github_reference(state.message) is not None
-            or self._requests_huggingface_tool(state.message)
-        ):
+        if self._extract_github_reference(state.message) is not None:
+            plan = self._plan_github_tool(state)
+        elif self._requests_huggingface_tool(state.message):
             return None
-        fetch_plan = self._plan_fetch_tool(state)
+        else:
+            plan = self._plan_fetch_tool(state)
         if (
-            fetch_plan is not None
-            and not fetch_plan.no_tool
-            and fetch_plan.requires_confirmation
+            plan is not None
+            and not plan.no_tool
+            and plan.requires_confirmation
         ):
-            return fetch_plan
+            return plan
         return None
 
     def _plan_fetch_tool(self, state: AgentExecutionState) -> AgentToolPlan | None:
@@ -547,9 +547,12 @@ class AgentRuntime(AgentResponsePolicy):
         if reference is None:
             return None
         if not reference["path"]:
-            requested_path = self._extract_read_file_path(
-                self._message_without_urls(state.message)
-            )
+            request_text = self._message_without_urls(state.message)
+            requested_path = self._extract_read_file_path(request_text)
+            if requested_path is None and re.search(
+                r"(?<![A-Za-z0-9_.-])readme(?![A-Za-z0-9_.-])", request_text, re.IGNORECASE
+            ):
+                requested_path = "README.md"
             if requested_path is not None:
                 reference = {**reference, "path": requested_path.replace("\\", "/")}
         tool = self._find_mcp_tool(MCP_GITHUB_SERVER_NAME, MCP_GITHUB_FILE_TOOL_IDS)

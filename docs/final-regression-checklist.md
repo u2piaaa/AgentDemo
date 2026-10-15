@@ -19,7 +19,10 @@ Expected: clean or intentionally documented local changes only.
 
 ## Backend
 
-Run migrations against the local development database:
+Stop workers that use the database, back it up, and verify its current migration
+before upgrading. Use a separate disposable database for integration tests; never
+point `TEST_DATABASE_URL` at the user's normal database. See
+[Release operations](release-operations.md) for the safe upgrade sequence.
 
 ```powershell
 cd D:\workplace\AgentDemo\backend
@@ -30,7 +33,7 @@ Run backend tests:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing --cov-fail-under=70
+.\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing --cov-fail-under=80
 .\.venv\Scripts\python.exe -m ruff check app tests
 .\.venv\Scripts\python.exe -m app.evals
 ```
@@ -47,7 +50,7 @@ intentional paid provider check is needed.
 
 ## Frontend
 
-Install from lockfile and build:
+With Node 24 LTS (minimum 22.12), install from lockfile and build:
 
 ```powershell
 cd D:\workplace\AgentDemo\frontend
@@ -118,9 +121,9 @@ With backend and frontend running:
    progress, persisted events, result text, and task-bound tool audit data.
 8. Cancel a running background task and verify it becomes `cancelled` with a
    completion timestamp.
-9. Restart the backend with a manually created `running` task and verify startup
-   recovery preserves a live lease, re-queues an expired task with attempts
-   remaining, and marks an exhausted task `stale`.
+9. In the isolated test database, verify worker recovery preserves live leases,
+   fences stale completions and blocks replay after uncertain tool side effects.
+   Only tasks that are safe to retry may be requeued within their attempt budget.
 10. Create one-time, interval, and daily schedules; verify timezone-aware next
     runs, pause/resume, immediate run, deterministic occurrence idempotency, and
     skipped catch-up bursts.
@@ -144,6 +147,14 @@ With backend and frontend running:
     citations show the MCP `source_uri`.
 19. Verify the frontend MCP panel handles empty, connected, and error states
     without breaking chat.
+20. Stop generation, switch conversations during streaming and verify late output
+    cannot overwrite the selected conversation. Scroll up during a long answer
+    and check **Latest**; refresh a pending confirmation before resolving it.
+21. Check both themes and desktop, phone and landscape layouts. Open Details and
+    the sidebar with a keyboard, cycle focus, dismiss with Escape and verify the
+    composer and schedule controls remain reachable.
+22. Verify real register/login/logout writes and session-expiry recovery, readiness
+    with the required schema, and preservation of sign-in during a temporary outage.
 
 ## Release Notes To Record
 

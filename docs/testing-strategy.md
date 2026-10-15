@@ -68,8 +68,9 @@ npm run build
 npm audit --audit-level=high
 ```
 
-Vitest covers SSE parsing, persisted runtime traces, task rendering helpers, and
-schedule descriptions.
+Use Node 24 LTS (minimum 22.12). Vitest covers SSE parsing and premature EOF,
+persisted runtime traces, stale stream cancellation, reading position, responsive
+modal controls, Markdown safety, clipboard recovery, task helpers and schedules.
 The build runs `tsc` and `vite build`; the audit blocks high-severity dependency
 findings.
 
@@ -81,6 +82,8 @@ npm run dev
 ```
 
 Open `http://localhost:5173` while the backend is running on port 8000.
+Confirm the owning processes and worktrees, since a branch update does not
+replace an already-running server. See [Release operations](release-operations.md).
 
 ## Fake Model Strategy
 

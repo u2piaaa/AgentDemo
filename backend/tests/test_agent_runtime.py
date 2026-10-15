@@ -1272,6 +1272,8 @@ async def test_github_repo_url_uses_github_mcp_before_fetch() -> None:
     assert tool_call["tool_name"] == "mcp.github.get_file_contents"
     assert tool_call["server_name"] == "github"
     assert tool_call["arguments"] == {"owner": "u2piaaa", "repo": "AgentDemo", "path": ""}
+    assert not any(name == "status" and data.get("label") == "retrieving_context"
+                   for name, data in events)
     assert tool_call["requires_confirmation"] is True
     assert tool_result["error"] == "Tool requires confirmation before execution"
     assert "token" not in [name for name, _ in events]
@@ -1281,7 +1283,8 @@ async def test_github_repo_url_uses_github_mcp_before_fetch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_github_repo_file_request_uses_github_mcp_before_local_file_tool() -> None:
+@pytest.mark.parametrize("filename", ["README.md", "README", "readme"])
+async def test_github_repo_file_request_uses_github_mcp_before_local_file_tool(filename) -> None:
     github_registry = await make_mcp_github_registry()
     registry = FakeRegistry(
         [make_read_file_tool(successful_read_file), *github_registry.list_tools()],
@@ -1296,7 +1299,7 @@ async def test_github_repo_file_request_uses_github_mcp_before_local_file_tool()
 
     events = await collect_events(
         runtime,
-        "请通过 GitHub 读取 https://github.com/u2piaaa/AgentDemo 仓库的 README.md",
+        f"请通过 GitHub 读取 https://github.com/u2piaaa/AgentDemo 仓库的 {filename}",
     )
 
     tool_call = next(data for name, data in events if name == "tool_call")
