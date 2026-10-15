@@ -50,6 +50,7 @@ import {
   getMcpPrompts,
   getMcpResources,
   getMcpServers,
+  refreshMcpServers,
   getTasks,
   getTaskSchedules,
   getTools,
@@ -254,6 +255,25 @@ export function App() {
       .catch((error) => setMcpError(error instanceof Error ? error.message : "Failed to load MCP"))
       .finally(() => setIsLoadingMcp(false));
   }, [currentUser]);
+
+  async function refreshMcp() {
+    setIsLoadingMcp(true);
+    setMcpError("");
+    try {
+      await refreshMcpServers();
+      const [resources, prompts, availableTools] = await Promise.all([
+        getMcpResources(), getMcpPrompts(), getTools()
+      ]);
+      setMcpServers(await getMcpServers());
+      setMcpResources(resources);
+      setMcpPrompts(prompts);
+      setTools(availableTools);
+    } catch (error) {
+      setMcpError(error instanceof Error ? error.message : "Failed to refresh MCP");
+    } finally {
+      setIsLoadingMcp(false);
+    }
+  }
 
   useEffect(() => {
     if (isStreaming) {
@@ -1524,6 +1544,9 @@ export function App() {
               <div className="section-title">
                 <Settings2 size={18} aria-hidden="true" />
                 <h3>MCP</h3>
+                <button type="button" className="icon-button text-button mcp-refresh" onClick={() => void refreshMcp()} disabled={isLoadingMcp}>
+                  {isLoadingMcp ? "Checking…" : "Refresh MCP"}
+                </button>
               </div>
               <div className="stack-list">
                 {mcpError ? <p className="inline-error">{mcpError}</p> : null}
@@ -1549,6 +1572,8 @@ export function App() {
                           <span className={`status-pill ${server.status}`}>{server.status}</span>
                         </div>
                         <span>{server.transport}</span>
+                        {server.protocol_version ? <span>Protocol {server.protocol_version}</span> : null}
+                        {server.last_checked_at ? <span>Last checked {new Date(server.last_checked_at).toLocaleString()}</span> : null}
                         <p>
                           {countLabel(availableToolCount, "available tool")} · {countLabel(resourceCount, "resource")} · {countLabel(promptCount, "prompt")}
                         </p>

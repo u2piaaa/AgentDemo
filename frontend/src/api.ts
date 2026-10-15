@@ -124,6 +124,12 @@ export async function getMcpServers(): Promise<McpServer[]> {
   return response.json();
 }
 
+export async function refreshMcpServers(): Promise<McpServer[]> {
+  const response = await fetch("/api/mcp/refresh", { method: "POST", headers: authHeaders() });
+  if (!response.ok) throw new Error(await readError(response, "Failed to refresh MCP servers"));
+  return response.json();
+}
+
 export async function getMcpResources(): Promise<McpResource[]> {
   const response = await fetch("/api/mcp/resources", { headers: authHeaders() });
   if (!response.ok) throw new Error(await readError(response, "Failed to load MCP resources"));

@@ -99,6 +99,8 @@ class AgentExecutionState(BaseModel):
     plan: AgentToolPlan = Field(default_factory=AgentToolPlan)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     observations: list[str] = Field(default_factory=list)
+    search_fetch_targets: list[dict[str, str]] = Field(default_factory=list)
+    confirmed_search_target: dict[str, str] | None = None
     final_answer: str = ""
     context_budget: dict[str, int] = Field(default_factory=dict)
     approval_id: UUID | None = None
@@ -266,6 +268,7 @@ class ToolManifestRead(BaseModel):
     requires_confirmation: bool = False
     enabled: bool
     parameters: dict[str, Any]
+    output_schema: dict[str, Any] | None = None
     timeout_seconds: int
     output_strategy: dict[str, Any] = Field(default_factory=dict)
 

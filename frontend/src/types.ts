@@ -66,6 +66,8 @@ export type McpServer = {
   registered_tool_count?: number;
   resource_count: number;
   prompt_count: number;
+  protocol_version?: string | null;
+  last_checked_at?: string | null;
   error?: string;
 };
 

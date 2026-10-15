@@ -3,11 +3,11 @@
     "fetch": {
       "enabled": true,
       "transport": "stdio",
-      "command": "backend\\.venv\\Scripts\\python.exe",
+      "protocol_mode": "legacy",
+      "command": "mcp\\fetch\\.venv\\Scripts\\python.exe",
       "args": [
         "-m",
-        "mcp_server_fetch",
-        "--ignore-robots-txt"
+        "mcp_server_fetch"
       ],
       "env": {
         "PYTHONIOENCODING": "utf-8"

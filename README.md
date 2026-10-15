@@ -74,7 +74,8 @@ when the backend starts. A planned tool call flows through these layers:
 
 1. `AgentRuntime` emits a `plan` event.
 2. If a tool is selected, the runtime emits `tool_call`.
-3. `ToolExecutor` validates arguments against the manifest JSON Schema subset.
+3. `ToolExecutor` validates arguments against JSON Schema 2020-12, including
+   nested constraints and local references. External schema retrieval is disabled.
 4. If `requires_confirmation` is true and the call is not confirmed, execution is
    blocked and audited.
 5. The handler runs in a worker thread with the lower of the manifest timeout and
@@ -110,6 +111,59 @@ assistant message. `POST /api/conversations/chat/confirm/cancel` accepts
 `conversation_id` and `approval_id` and persists cancellation. Interrupted
 continuations remain consumed: inspect tool history before requesting the work
 again, because an external effect may already have completed.
+
+Search enrichment follows the same confirmation policy: each selected webpage
+is saved as a pending Fetch MCP approval. Confirmation resumes the remaining
+queue without repeating the search or previously completed fetches. Cancelling
+the pending approval stops that enrichment chain.
+
+## MCP Connections
+
+The client uses the official MCP Python SDK 2.3 and negotiates the stable
+`2026-07-28` protocol, with automatic fallback to legacy initialization through
+`2025-11-25`. Standard JSONL, Streamable HTTP and legacy HTTP+SSE use the SDK.
+Existing nonstandard `content-length` subprocess configs retain a compatibility
+adapter. Remote tools still run through `ToolExecutor`; protocol migration does
+not grant additional execution permissions.
+
+Copy `mcp.servers.example.json` to the ignored `mcp.servers.json` and configure
+only the services you use. Header credentials must use `${ENVIRONMENT_VARIABLE}`
+references. Subprocesses inherit OS essentials plus explicitly mapped variables.
+
+Fetch MCP currently depends on SDK 1.x and needs a separate environment:
+
+```powershell
+uv sync --project mcp/fetch --locked
+```
+
+The Windows example points to `mcp\\fetch\\.venv\\Scripts\\python.exe`.
+On Linux/macOS use `mcp/fetch/.venv/bin/python`. When upgrading an existing
+installation, update only the Fetch server's `command` to this interpreter
+before upgrading the backend environment. Keep the existing arguments and
+environment mappings. `mcp/fetch/uv.lock` pins the independent dependency set;
+do not install `mcp-server-fetch` in `backend/.venv`.
+
+Per-server config supports `protocol_mode` (`auto`, `legacy`, `2026-07-28`),
+`request_timeout_seconds` (30), `discovery_timeout_seconds` (15),
+`discovery_cache_seconds` (60), `discovery_max_pages` (20),
+`discovery_max_items` (1,000), and `max_response_bytes` (2 MiB). The root
+`discovery_concurrency` defaults to 4. HTTP bodies are bounded before parsing;
+stdio results are bounded after SDK parsing (legacy framed messages before
+parsing). Only catalog metadata is cached, never tool execution results.
+
+Runtime → Tools shows the last successful protocol negotiation and check time.
+`ready` means the latest connection succeeded; it is not a persistent socket or
+a continuous health guarantee. `configured` only describes static config,
+`mock` identifies explicit fixtures, and `error` reports a failed check.
+**Refresh MCP** calls authenticated `POST /api/mcp/refresh`, invalidates catalog
+caches, and atomically replaces registered remote tools. One failed server does
+not hide tools from healthy servers.
+
+Structured MCP content and resource links are retained, output schemas are
+validated, binary media is omitted from text context, and nested output is
+bounded. `isError` remains a failed result in the UI, model context and audit.
+Interrupted execution is audited as `interrupted`; its external outcome can be
+unknown, so the app does not automatically replay it.
 
 Runtime budgets are configurable in `backend/.env`: `AGENT_RUN_TIMEOUT_SECONDS`
 (180), `AGENT_RETRIEVAL_TIMEOUT_SECONDS` (12), `AGENT_CONTEXT_MAX_CHARS` (48,000)

@@ -53,6 +53,7 @@ async def create_approval(database):
         conversation_id=conversation_id, user_id=user_id, message="Read README.md",
         trace_id=uuid4().hex,
         observations=["Earlier tool result", "Tool requires confirmation before execution"],
+        search_fetch_targets=[{"url": "https://example.com/next", "title": "Next page"}],
         tool_calls=[
             {"tool_name": "earlier", "arguments": {}, "result": {"status": "success"}},
             {"tool_name": "read_file", "arguments": {"path": "README.md"},
@@ -86,6 +87,9 @@ async def test_restart_restores_snapshot_and_claim_is_committed_before_effect(ap
     assert restored.content == ""
     assert restored.metadata_["approval"]["status"] == "pending"
     assert restored.metadata_["continuation"]["observations"] == ["Earlier tool result"]
+    assert restored.metadata_["continuation"]["search_fetch_targets"] == [
+        {"url": "https://example.com/next", "title": "Next page"},
+    ]
     assert [call["tool_name"] for call in restored.metadata_["continuation"]["tool_calls"]] == ["earlier"]
     await claim(approval_database, request)
     assert (await stored(approval_database, request)).metadata_["approval"]["status"] == "approved"

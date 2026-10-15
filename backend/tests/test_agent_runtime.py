@@ -516,6 +516,27 @@ def assistant_messages(session: FakeSession) -> list[Message]:
     return [item for item in session.items if isinstance(item, Message) and item.role == "assistant"]
 
 
+async def confirm_search_pages(runtime: AgentRuntime) -> list[tuple[str, dict]]:
+    events = []
+    for _ in range(3):
+        pending = next((item for item in reversed(assistant_messages(runtime.session))
+                        if (item.metadata_ or {}).get("approval", {}).get("status") == "pending"), None)
+        if pending is None:
+            break
+        approval = pending.metadata_["approval"]
+        # A fresh runtime proves the queue comes from persistence, not process memory.
+        resumed = AgentRuntime(session=runtime.session, plugin_registry=runtime.plugin_registry,
+                               model_gateway=runtime.model_gateway, rag_service=runtime.rag)
+        async for event in resumed.stream_confirmed_tool(ToolConfirmationRequest(
+            conversation_id=pending.conversation_id, approval_id=pending.id,
+            message=approval["message"], tool_name=approval["tool_name"],
+            arguments=approval["arguments"],
+        )):
+            events.append((event["event"], json.loads(event["data"])))
+    assert not [data for name, data in events if name == "error"]
+    return events
+
+
 @pytest.mark.asyncio
 async def test_plain_chat_uses_fake_gateway_without_tool() -> None:
     session = FakeSession()
@@ -939,14 +960,17 @@ async def test_web_search_enriches_results_with_mcp_fetch_content() -> None:
     tool_results = [data for name, data in events if name == "tool_result"]
     assert [item["tool_name"] for item in tool_calls] == ["web_search", "mcp.fetch.fetch"]
     assert tool_calls[1]["arguments"] == {"url": "https://example.com/news", "max_length": 8000}
-    assert tool_calls[1]["requires_confirmation"] is False
+    assert tool_calls[1]["requires_confirmation"] is True
     assert tool_calls[1]["search_enrichment"] is True
-    assert [item["status"] for item in tool_results] == ["success", "success"]
+    assert [item["status"] for item in tool_results] == ["success", "failed"]
+    assert fetch_client.calls == []
+    assert gateway.stream_calls == []
+    await confirm_search_pages(runtime)
     context = "\n".join(gateway.stream_calls[-1]["context"])
     assert "Web search results" in context
     assert "Search result page content" in context
     assert "# Page for https://example.com/news" in context
-    assert "Source: https://example.com/news" in assistant_messages(session)[0].content
+    assert "Source: https://example.com/news" in assistant_messages(session)[-1].content
 
 
 @pytest.mark.asyncio
@@ -974,6 +998,11 @@ async def test_web_search_fetch_enrichment_limits_and_deduplicates_urls() -> Non
     )
 
     await collect_events(runtime, "web search latest AI funding news")
+    assert fetch_client.calls == []
+    pending = assistant_messages(runtime.session)[-1]
+    assert len(pending.metadata_["continuation"]["search_fetch_targets"]) == 2
+    events = await confirm_search_pages(runtime)
+    assert not any(data.get("tool_name") == "web_search" for name, data in events if name == "tool_call")
 
     assert [item["url"] for item in fetch_client.calls] == [
         "https://example.com/one",
@@ -1024,14 +1053,17 @@ async def test_web_search_fetch_failure_continues_with_other_results() -> None:
 
     events = await collect_events(runtime, "web search today's AI news")
 
+    events = await confirm_search_pages(runtime)
+
     fetch_results = [
         data for name, data in events if name == "tool_result" and data["tool_name"] == "mcp.fetch.fetch"
+        and data.get("error") != "Tool requires confirmation before execution"
     ]
     assert [item["status"] for item in fetch_results] == ["failed", "success"]
     context = "\n".join(gateway.stream_calls[-1]["context"])
     assert "Search result page fetch failed" in context
     assert "# Page for https://example.com/news" in context
-    assert "Source: https://example.com/news" in assistant_messages(session)[0].content
+    assert "Source: https://example.com/news" in assistant_messages(session)[-1].content
 
 
 @pytest.mark.asyncio
@@ -1052,13 +1084,26 @@ async def test_web_search_all_fetch_failures_fall_back_to_search_snippets() -> N
     )
 
     await collect_events(runtime, "web search today's AI news")
+    await confirm_search_pages(runtime)
 
     assert gateway.stream_calls == []
-    answer = assistant_messages(session)[0].content
+    answer = assistant_messages(session)[-1].content
     assert "every search-result page fetch failed" in answer
     assert "Fallback summary" in answer or "fallback summary" in answer
     assert "Current AI news" in answer
     assert "https://example.com/news" in answer
+
+
+@pytest.mark.asyncio
+async def test_direct_fetch_failure_cannot_be_replaced_by_model_success():
+    session, gateway = FakeSession(), FakeGateway(reply_text="I fetched everything successfully")
+    fetch_client = FakeFetchMcpClient(failures={"https://example.com/fail"})
+    runtime = AgentRuntime(session=session, plugin_registry=FakeRegistry(make_mcp_fetch_tool(fetch_client)),
+                           model_gateway=gateway, rag_service=FakeRag())
+    await collect_events(runtime, "Summarize https://example.com/fail")
+    await confirm_search_pages(runtime)
+    assert gateway.stream_calls == []
+    assert "tool call failed" in assistant_messages(session)[-1].content.lower()
 
 
 @pytest.mark.asyncio

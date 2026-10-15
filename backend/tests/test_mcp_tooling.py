@@ -1,10 +1,12 @@
 import sys
+import json
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+import httpx2
 
-from app.mcp.client import McpClientManager
+from app.mcp.client import BoundedHttpClient, McpClientManager
 from app.mcp.config import McpConfig, McpServerConfig
 from app.mcp.registry import UnifiedToolRegistry
 from app.mcp.tools import (
@@ -84,22 +86,26 @@ class FakeHttpResponse:
 def install_fake_http_client(monkeypatch, responder):
     instances = []
 
-    class FakeAsyncClient:
+    class FakeAsyncClient(BoundedHttpClient):
         def __init__(self, *args, **kwargs) -> None:
             self.calls = []
             instances.append(self)
+            super().__init__(*args, transport=httpx2.MockTransport(self.respond), **kwargs)
 
-        async def __aenter__(self):
-            return self
+        def respond(self, request):
+            if request.method != "POST":
+                return httpx2.Response(405)
+            payload = json.loads(request.content)
+            self.calls.append({"url": str(request.url), "headers": request.headers, "json": payload})
+            if payload["method"] == "server/discover":
+                return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload["id"],
+                                                "error": {"code": -32601, "message": "legacy"}})
+            response = responder(payload, request.headers)
+            if response._payload is not None:
+                return httpx2.Response(response.status_code, headers=response.headers, json=response._payload)
+            return httpx2.Response(response.status_code, headers=response.headers, text=response.text)
 
-        async def __aexit__(self, exc_type, exc, traceback) -> None:
-            return None
-
-        async def post(self, url, *, headers, json):
-            self.calls.append({"url": url, "headers": headers, "json": json})
-            return responder(json, headers)
-
-    monkeypatch.setattr("app.mcp.client.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("app.mcp.client.BoundedHttpClient", FakeAsyncClient)
     return instances
 
 
@@ -298,7 +304,7 @@ while True:
         continue
     method = message.get("method")
     if method == "initialize":
-        write_message({"jsonrpc": "2.0", "id": request_id, "result": {"capabilities": {}}})
+        write_message({"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2025-11-25", "serverInfo": {"name": "fixture", "version": "1"}, "capabilities": {"tools": {}}}})
     elif method == "tools/list":
         write_message(
             {
@@ -367,7 +373,7 @@ async def test_http_mcp_server_lists_tools_and_expands_header_env(monkeypatch) -
         method = payload["method"]
         if method == "initialize":
             return FakeHttpResponse(
-                {"jsonrpc": "2.0", "id": payload["id"], "result": {"capabilities": {}}},
+                {"jsonrpc": "2.0", "id": payload["id"], "result": {"protocolVersion": "2025-11-25", "serverInfo": {"name": "fixture", "version": "1"}, "capabilities": {"tools": {}}}},
                 headers={"content-type": "application/json", "Mcp-Session-Id": "session-1"},
             )
         if method == "notifications/initialized":
@@ -417,12 +423,12 @@ async def test_streamable_http_mcp_server_parses_sse_tools_list(monkeypatch) -> 
         method = payload["method"]
         if method == "initialize":
             return FakeHttpResponse(
-                {"jsonrpc": "2.0", "id": payload["id"], "result": {"capabilities": {}}}
+                {"jsonrpc": "2.0", "id": payload["id"], "result": {"protocolVersion": "2025-11-25", "serverInfo": {"name": "fixture", "version": "1"}, "capabilities": {"tools": {}}}}
             )
         if method == "notifications/initialized":
             return FakeHttpResponse(status_code=202)
         body = (
-            'data: {"jsonrpc":"2.0","id":2,"result":{"tools":'
+            'data: {"jsonrpc":"2.0","id":' + json.dumps(payload["id"]) + ',"result":{"tools":'
             '[{"name":"dataset_search","inputSchema":{"type":"object"}}]}}\n\n'
         )
         return FakeHttpResponse(headers={"content-type": "text/event-stream"}, text=body)
@@ -451,10 +457,13 @@ async def test_http_mcp_server_calls_tool(monkeypatch) -> None:
         method = payload["method"]
         if method == "initialize":
             return FakeHttpResponse(
-                {"jsonrpc": "2.0", "id": payload["id"], "result": {"capabilities": {}}}
+                {"jsonrpc": "2.0", "id": payload["id"], "result": {"protocolVersion": "2025-11-25", "serverInfo": {"name": "fixture", "version": "1"}, "capabilities": {"tools": {}}}}
             )
         if method == "notifications/initialized":
             return FakeHttpResponse(status_code=202)
+        if method == "tools/list":
+            return FakeHttpResponse({"jsonrpc": "2.0", "id": payload["id"], "result": {
+                "tools": [{"name": "model_search", "inputSchema": {"type": "object"}}]}})
         assert payload["params"] == {
             "name": "model_search",
             "arguments": {"query": "Qwen 3 quantized"},
@@ -513,8 +522,8 @@ async def test_http_mcp_server_reports_401_clearly(monkeypatch) -> None:
     with pytest.raises(RuntimeError) as exc_info:
         await client.list_tools("huggingface")
 
-    assert "returned 401" in str(exc_info.value)
-    assert "token" in str(exc_info.value).lower()
+    assert "HTTP 401" in str(exc_info.value)
+    assert "credentials" in str(exc_info.value).lower()
 
 
 @pytest.mark.asyncio
@@ -531,8 +540,10 @@ for line in sys.stdin:
     request_id = message.get("id")
     if request_id is None:
         continue
-    if message.get("method") == "initialize":
-        print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": {"capabilities": {}}}), flush=True)
+    if message.get("method") == "server/discover":
+        print(json.dumps({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "legacy"}}), flush=True)
+    elif message.get("method") == "initialize":
+        print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2025-11-25", "serverInfo": {"name": "fixture", "version": "1"}, "capabilities": {"tools": {}}}}), flush=True)
     elif message.get("method") == "tools/list":
         print(
             json.dumps(
@@ -589,7 +600,7 @@ for line in sys.stdin:
         continue
     method = message.get("method")
     if method == "initialize":
-        result = {"capabilities": {"tools": {}}}
+        result = {"protocolVersion": "2025-11-25", "serverInfo": {"name": "fixture", "version": "1"}, "capabilities": {"tools": {}}}
         print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}), flush=True)
     elif method == "tools/list":
         result = {"tools": [{"name": "fetch", "inputSchema": {"type": "object"}}]}
@@ -703,7 +714,7 @@ async def test_mcp_client_global_lists_skip_unavailable_servers() -> None:
     assert [tool["name"] for tool in await client.list_tools()] == ["lookup"]
     assert [resource["name"] for resource in await client.list_resources()] == ["fake doc"]
     assert [prompt["name"] for prompt in await client.list_prompts()] == ["fake_prompt"]
-    with pytest.raises(OSError):
+    with pytest.raises(RuntimeError):
         await client.list_tools("broken")
 
 

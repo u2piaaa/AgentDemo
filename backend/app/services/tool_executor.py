@@ -1,11 +1,13 @@
 import asyncio
 import json
+import logging
 from collections.abc import Mapping
 from time import perf_counter
 from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
+from anyio import move_on_after
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +18,10 @@ from app.models.task import Task
 from app.models.tool import ToolCall
 from app.schemas import ToolRunResponse
 from app.services.plugin_registry import TOOL_PROVIDER_MCP_SERVER, RegisteredTool
+from app.services.tool_schema import validate_tool_schema
+
+
+logger = logging.getLogger(__name__)
 
 
 class ToolExecutor:
@@ -72,6 +78,20 @@ class ToolExecutor:
                 self._dispatch_tool(tool, arguments, confirmed=confirmed, identity=identity),
                 timeout=timeout,
             )
+        except asyncio.CancelledError:
+            # Cancellation does not prove that an external effect was rolled back.
+            # Persist the uncertain outcome while the request's DB session still exists.
+            if session is not None:
+                try:
+                    with move_on_after(5, shield=True):
+                        await session.rollback()
+                        response = self._response(tool, "interrupted", started, trace_id,
+                                                  error="Tool execution interrupted; outcome may be unknown")
+                        await self._record_audit(session, tool, arguments, response, user_id,
+                                                 conversation_id, task_id)
+                except Exception:
+                    logger.exception("Could not audit interrupted tool execution")
+            raise
         except TimeoutError:
             response = self._response(
                 tool,
@@ -98,7 +118,7 @@ class ToolExecutor:
             return response
 
         limited_output = self._limit_output(tool, output)
-        if self._is_mcp_error_output(limited_output):
+        if self._is_mcp_error_output(output):
             response = self._response(
                 tool,
                 "failed",
@@ -172,6 +192,7 @@ class ToolExecutor:
 
         if errors:
             raise HTTPException(status_code=422, detail="; ".join(errors))
+        validate_tool_schema(schema, arguments, label="Tool arguments")
 
     def _matches_schema_type(self, value: Any, expected_type: Any) -> bool:
         if isinstance(expected_type, list):
@@ -216,12 +237,46 @@ class ToolExecutor:
         max_chars = self._output_limit(tool)
         if isinstance(output, str):
             return output[:max_chars]
-        if isinstance(output, dict):
-            return {
-                key: value[:max_chars] if isinstance(value, str) else value
-                for key, value in output.items()
-            }
-        return output
+        remaining, truncated = max_chars, False
+
+        def bounded(value, depth=0):
+            nonlocal remaining, truncated
+            if remaining < 16 or depth > 16:
+                truncated = True
+                return None
+            remaining -= 4
+            if isinstance(value, str):
+                result = value[:max(0, remaining)]
+                truncated |= len(result) < len(value)
+                remaining -= len(result)
+                return result
+            if isinstance(value, dict):
+                result = {}
+                for key, item in value.items():
+                    if remaining < len(str(key)) + 16:
+                        truncated = True
+                        break
+                    remaining -= len(str(key)) + 4
+                    result[key] = bounded(item, depth + 1)
+                return result
+            if isinstance(value, (list, tuple)):
+                result = []
+                for item in value:
+                    if remaining < 16:
+                        truncated = True
+                        break
+                    result.append(bounded(item, depth + 1))
+                return result
+            remaining -= len(str(value))
+            return value
+
+        result = bounded(output)
+        if truncated:
+            result = result if isinstance(result, dict) else {"content": result}
+            result["_truncated"] = True
+            if self._is_mcp_error_output(output):
+                result["isError"] = True
+        return result
 
     def _output_limit(self, tool: RegisteredTool) -> int:
         policy_limit = tool.manifest.output_strategy.get("max_chars")
@@ -334,6 +389,10 @@ class ToolExecutor:
                 identity=identity or McpIdentity(),
             )
             result = await tool.client.call_tool(tool.server_name, tool.provider_tool_id, arguments)
+            if tool.manifest.output_schema is not None and not self._is_mcp_error_output(result):
+                validate_tool_schema(tool.manifest.output_schema,
+                                     result.get("structuredContent") if isinstance(result, dict) else None,
+                                     label="MCP structured output")
             return normalize_mcp_tool_result(result)
         if tool.handler is None:
             raise RuntimeError("Local tool is missing a handler")

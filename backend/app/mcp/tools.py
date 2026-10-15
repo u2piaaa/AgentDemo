@@ -69,6 +69,7 @@ def mcp_tool_to_registered_tool(
         permission=permission,
         requires_confirmation=requires_confirmation,
         parameters=tool.get("inputSchema") or tool.get("input_schema") or {"type": "object"},
+        output_schema=tool.get("outputSchema"),
         timeout_seconds=int(tool.get("timeout_seconds") or 30),
         output_strategy=tool.get("output_strategy") or {},
         entrypoint="mcp:call_tool",
@@ -117,8 +118,22 @@ def normalize_mcp_tool_result(result: Any) -> Any:
         ]
         if text_parts:
             normalized = {"content": "\n".join(str(part) for part in text_parts)}
-            for key in ("isError", "url"):
+            for key in ("isError", "url", "structuredContent"):
                 if key in result:
                     normalized[key] = result[key]
+            attachments = [_safe_content(item) for item in content
+                           if isinstance(item, dict) and item.get("type") != "text"]
+            if attachments:
+                normalized["attachments"] = attachments
             return normalized
+        return {**result, "content": [_safe_content(item) for item in content if isinstance(item, dict)]}
     return result
+
+
+def _safe_content(item: dict) -> dict:
+    # Binary media is not useful in textual context or audit rows. Keep its type/link.
+    if item.get("type") in {"image", "audio"}:
+        return {"type": item["type"], "mimeType": item.get("mimeType"), "omitted": "binary media"}
+    if item.get("type") == "resource" and isinstance(item.get("resource"), dict):
+        return {**item, "resource": {key: value for key, value in item["resource"].items() if key != "blob"}}
+    return item

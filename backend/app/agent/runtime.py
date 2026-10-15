@@ -258,7 +258,9 @@ class AgentRuntime(AgentResponsePolicy):
             "approval_id": approval.id,
             **{key: continuation.get(key, []) for key in (
                 "citations", "mcp_resources", "mcp_prompts", "observations", "tool_calls",
+                "search_fetch_targets",
             )},
+            "confirmed_search_target": (approval.metadata_.get("tool_calls") or [{}])[-1].get("search_target"),
             "events": [],
         }
         completed = False
@@ -664,10 +666,18 @@ class AgentRuntime(AgentResponsePolicy):
                 "result": result.model_dump(),
             }
         )
-        state.observations.append(self._format_tool_observation(result))
+        if state.confirmed_search_target:
+            state.tool_calls[-1].update(search_enrichment=True, search_target=state.confirmed_search_target)
+            state.observations.append(self._format_search_fetch_observation(result, state.confirmed_search_target))
+            state.confirmed_search_target = None
+        else:
+            state.observations.append(self._format_tool_observation(result))
         yield self._event("tool_result", result.model_dump())
         if result.status == "success" and plan.tool_name == WEB_SEARCH_TOOL_NAME:
             async for event in self._enrich_web_search_with_fetch(state, result):
+                yield event
+        elif state.tool_calls[-1].get("search_enrichment"):
+            async for event in self._fetch_search_targets(state):
                 yield event
 
     async def _execute_tool_plan(self, state: AgentExecutionState) -> ToolRunResponse:
@@ -716,15 +726,20 @@ class AgentRuntime(AgentResponsePolicy):
             )
             return
 
-        successes = 0
-        failures: list[str] = []
-        for target in targets:
+        state.search_fetch_targets = targets
+        async for event in self._fetch_search_targets(state):
+            yield event
+
+    async def _fetch_search_targets(self, state: AgentExecutionState) -> AsyncIterator[dict[str, str]]:
+        tool = self.plugin_registry.get(MCP_FETCH_TOOL_NAME) if self.plugin_registry else None
+        if tool is None:
+            state.search_fetch_targets = []
+            state.observations.append("Fetch MCP is unavailable. Use the saved search snippets and URLs.")
+            return
+        while state.search_fetch_targets:
+            target = state.search_fetch_targets.pop(0)
             arguments = {"url": target["url"], "max_length": self._fetch_max_length()}
-            reason = (
-                "Automatically fetching a public web search result page as part of the "
-                "user's explicit search request. This read-only fetch is auto-confirmed "
-                "for the search enrichment step."
-            )
+            reason = "Fetch this search result page to supplement the saved search snippets."
             yield self._event(
                 "tool_call",
                 {
@@ -734,7 +749,7 @@ class AgentRuntime(AgentResponsePolicy):
                     "server_name": tool.server_name,
                     "arguments": arguments,
                     "reason": reason,
-                    "requires_confirmation": False,
+                    "requires_confirmation": tool.manifest.requires_confirmation,
                     "trace_id": state.trace_id,
                     "search_enrichment": True,
                 },
@@ -742,7 +757,7 @@ class AgentRuntime(AgentResponsePolicy):
             result = await self.tool_executor.run(
                 tool,
                 arguments,
-                confirmed=True,
+                confirmed=False,
                 session=self.session,
                 user_id=state.user_id,
                 conversation_id=state.conversation_id,
@@ -757,18 +772,21 @@ class AgentRuntime(AgentResponsePolicy):
                     "server_name": tool.server_name,
                     "arguments": arguments,
                     "reason": reason,
-                    "requires_confirmation": False,
+                    "requires_confirmation": tool.manifest.requires_confirmation,
                     "search_enrichment": True,
+                    "search_target": target,
                     "result": result.model_dump(),
                 }
             )
-            if result.status == "success":
-                successes += 1
-            else:
-                failures.append(f"{target['url']}: {result.error or result.status}")
             state.observations.append(self._format_search_fetch_observation(result, target))
             yield self._event("tool_result", result.model_dump())
+            if result.error == "Tool requires confirmation before execution":
+                return
 
+        attempts = [call for call in state.tool_calls if call.get("search_enrichment")]
+        successes = sum(call["result"]["status"] == "success" for call in attempts)
+        failures = [f"{call['arguments']['url']}: {call['result'].get('error') or call['result']['status']}"
+                    for call in attempts if call["result"]["status"] != "success"]
         if successes == 0:
             detail = "; ".join(failures) if failures else "no fetch attempts completed"
             state.observations.append(

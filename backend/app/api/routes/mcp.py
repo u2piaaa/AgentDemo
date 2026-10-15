@@ -26,10 +26,15 @@ async def list_mcp_servers(request: Request, current_user: CurrentUser) -> list[
         if server_name in errors:
             item["status"] = "error"
             item["error"] = errors[server_name]
-        elif item["registered_tool_count"] > 0:
-            item["status"] = "connected"
         enriched.append(item)
     return enriched
+
+
+@router.post("/refresh")
+async def refresh_mcp_servers(request: Request, current_user: CurrentUser) -> list[dict]:
+    request.app.state.mcp_client.invalidate_catalogs()
+    await request.app.state.tool_registry.refresh_mcp_tools()
+    return await list_mcp_servers(request, current_user)
 
 
 @router.get("/resources")

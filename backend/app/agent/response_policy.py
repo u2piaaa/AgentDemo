@@ -148,13 +148,19 @@ class AgentResponsePolicy:
         search_fallback = self._search_results_fallback_answer(state)
         if search_fallback is not None:
             return search_fallback
-        if latest.get("tool_name") != WEB_SEARCH_TOOL_NAME:
-            return None
         result = latest.get("result")
         if not isinstance(result, dict):
             return None
         status = str(result.get("status") or "")
         if status == "success":
+            return None
+        if latest.get("provider") == "mcp_server" and not latest.get("search_enrichment"):
+            if self._message_has_cjk(state.message):
+                return "这次工具调用失败，未取得可用结果，因此暂时无法完成所请求的读取或总结。请查看工具历史中的错误信息，修复服务或更换来源后重试。"
+            return ("The tool call failed and returned no usable result, so I cannot complete the requested "
+                    "retrieval or summary. Check the error in tool history, then retry after fixing the "
+                    "service or choosing another source.")
+        if latest.get("tool_name") != WEB_SEARCH_TOOL_NAME:
             return None
         error = str(result.get("error") or status or "unknown error")
         if self._message_has_cjk(state.message):

@@ -19,6 +19,8 @@ class AgentGraphState(TypedDict, total=False):
     plan: AgentToolPlan
     tool_calls: list[dict[str, Any]]
     observations: list[str]
+    search_fetch_targets: list[dict[str, str]]
+    confirmed_search_target: dict[str, str] | None
     final_answer: str
     context_budget: dict[str, int]
     approval_id: UUID | None

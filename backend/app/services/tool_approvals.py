@@ -43,6 +43,7 @@ class ToolApprovalStore:
                     "mcp_prompts": state.mcp_prompts,
                     "observations": list(state.observations[:-1]),
                     "tool_calls": deepcopy(state.tool_calls[:-1]),
+                    "search_fetch_targets": deepcopy(state.search_fetch_targets),
                 },
                 "approval": {
                     "status": "pending", "expires_at": expires_at.isoformat(),

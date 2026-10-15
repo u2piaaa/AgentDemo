@@ -18,6 +18,7 @@ class PluginManifest(BaseModel):
     permission: str = "safe"
     requires_confirmation: bool = False
     parameters: dict[str, Any] = Field(default_factory=lambda: {"type": "object"})
+    output_schema: dict[str, Any] | None = None
     timeout_seconds: int = Field(default=30, gt=0, le=300)
     output_strategy: dict[str, Any] = Field(default_factory=dict)
     entrypoint: str
@@ -47,6 +48,7 @@ class RegisteredTool:
             requires_confirmation=self.manifest.requires_confirmation,
             enabled=self.manifest.enabled,
             parameters=self.manifest.parameters,
+            output_schema=self.manifest.output_schema,
             timeout_seconds=self.manifest.timeout_seconds,
             output_strategy=self.manifest.output_strategy,
         )

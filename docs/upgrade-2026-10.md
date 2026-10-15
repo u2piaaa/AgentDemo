@@ -23,7 +23,7 @@ and audit boundary remain compatibility requirements.
 | 1 | Dependencies and quality gates | Current stable backend packages, reproducible lockfile, Python compatibility matrix, dependency audits, baseline vulnerability fix | Clean locked install; full backend tests, coverage, evaluations and lint; frontend tests/build/audit | Released: `8895a7a` |
 | 2 | Model gateway | Provider-neutral configuration, bounded retries/timeouts, robust streaming and embedding validation | Deterministic transport fault tests; no duplicated streamed tokens; existing model/runtime tests | Released: `4535e3c` |
 | 3 | Agent runtime and conversations | Explicit execution/context budgets, cancellation and reliable continuation while preserving graph/SSE semantics | Runtime/route regression tests, protocol sanitization, real confirmation flow | Released: `eaabd47` |
-| 4 | Tools, search and MCP | Current stable MCP protocol capabilities, accurate connection/error state, bounded discovery and execution | MCP/security/executor/search suites; real tool confirmation and history | Planned |
+| 4 | Tools, search and MCP | Current stable MCP protocol capabilities, accurate connection/error state, bounded discovery and execution | MCP/security/executor/search suites; real tool confirmation and history | Acceptance in progress |
 | 5 | RAG and memory | Hybrid ranking and bounded context with reliable source attribution and scoped retrieval | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Planned |
 | 6 | Background tasks and schedules | Deadline/recovery/cancellation correctness and inspectable execution budgets | Worker/scheduler/timezone/concurrency tests; real scheduled task flow | Planned |
 | 7 | Authentication and API operations | Current password hashing with legacy migration, bounded operational checks and safe defaults | Real PostgreSQL register/login writes; ownership/auth/health tests | Planned |
@@ -167,13 +167,61 @@ passed Python 3.11/3.12/3.14 (including PostgreSQL migrations and approval races
 frontend tests/build and both dependency audits. Commit `eaabd47` was
 fast-forwarded into `run` and both release branches were pushed.
 
+## Iteration 4 — tools, search and MCP
+
+Official sources checked on 2026-10-15:
+
+- [MCP versioning](https://modelcontextprotocol.io/specification/versioning)
+  identifies `2026-07-28` as stable; its
+  [transport](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
+  carries version/capability metadata per request.
+- [Python SDK](https://py.sdk.modelcontextprotocol.io/) and
+  [protocol modes](https://py.sdk.modelcontextprotocol.io/protocol-versions/)
+  document stable v2 and automatic legacy negotiation. The backend locks 2.3.0.
+- [Fetch MCP package](https://pypi.org/project/mcp-server-fetch/2026.10.10/)
+  still requires SDK 1.x. Its separate `mcp/fetch` uv project locks the service
+  and dependencies independently, preserving compatibility with backend SDK 2.x.
+
+Implemented on `codex/mcp-protocol-upgrade` from the verified module 3 baseline:
+
+- Official SDK transports, real protocol negotiation, bounded concurrent
+  paginated discovery, catalog caching and atomic registry refresh. Static
+  catalogs no longer imply a successful connection. Response diagnostics redact
+  configured secrets and omit remote validation payloads.
+- Search-derived Fetch calls honor the executor confirmation gate. The remaining
+  queue is persisted with each approval; fresh runtimes resume without replaying
+  search or completed pages. Confirmed graphs can pause for another approval.
+- JSON Schema 2020-12 nested input validation with local-only references,
+  structured output validation/preservation, bounded nested output and binary
+  omission. Cancellation records an uncertain interrupted audit outcome.
+- Runtime protocol/check-time display and authenticated Refresh MCP. A failed
+  direct MCP call gets a deterministic failure reply rather than an invented
+  successful summary.
+
+Local acceptance:
+
+- 329 backend tests passed with the dedicated PostgreSQL database; coverage
+  84.06%. Ruff and all 12 deterministic Agent evaluations passed.
+- 21 frontend tests, production build and npm audit passed. Backend and isolated
+  Fetch dependency audits found no known vulnerabilities (one transient PyPI
+  TLS failure cleared on retry).
+- Official SDK subprocess server negotiated `2026-07-28`; actual Fetch MCP
+  2026.10.10 negotiated legacy `2025-11-25` and retrieved a public example page
+  through `ToolExecutor`, after an unconfirmed call was blocked.
+- Real browser: direct fetch approval survived reload; search approval survived
+  backend restart; successful continuation, failed-result history and explicit
+  failure answer persisted. Stopping/restarting the local MCP fixture changed
+  the refreshed registry from error/zero remote tools back to ready/one tool.
+- Mobile 390 × 844: composer and Runtime Tools panel fit. Desktop 1440 × 900
+  checked. Screenshots remain ignored under `.local/mcp-*-mobile.jpg`.
+
+CI and release commit are recorded after the release gate finishes.
+
 ## Next iteration handoff
 
-Iteration 4 reviews tool/search/MCP transport and safety. Keep all execution
-inside `ToolExecutor`, especially search-derived follow-up fetches. Audit the
-current automatic-confirmation behavior of search enrichment against the
-declared tool policy, bound discovery/transport work, and normalize server
-errors consistently in UI/model context/audit records.
+Iteration 5 reviews RAG and memory: ranking quality, owner/conversation scoping,
+bounded retrieval and source attribution. Verify against real PostgreSQL and
+document upload/query flows. Keep tool actions inside `ToolExecutor`.
 
 The isolated acceptance database is `agent_upgrade_20261015`. Local HTTP model
 and MCP fixtures live under ignored `.local` in the test worktree. The browser

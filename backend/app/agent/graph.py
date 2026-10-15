@@ -29,7 +29,10 @@ def build_agent_graph(runtime, mode: GraphMode = "chat"):
         graph.add_edge(START, "load_context")
         graph.add_edge("load_context", "plan")
         graph.add_edge("plan", "execute_tool")
-        graph.add_edge("execute_tool", "generate_answer")
+        graph.add_conditional_edges(
+            "execute_tool", _route_after_execute_tool,
+            {"plan": "generate_answer", "await_confirmation": "await_confirmation"},
+        )
     else:
         graph.add_edge(START, "ensure_conversation")
         graph.add_edge("ensure_conversation", "load_context")

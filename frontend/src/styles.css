@@ -198,6 +198,12 @@ select:focus-visible {
 .brand p,
 .topbar h2,
 .topbar p,
+.icon-button.mcp-refresh {
+  width: auto;
+  margin-left: auto;
+  font-size: 0.75rem;
+}
+
 .section-title h3 {
   margin: 0;
 }

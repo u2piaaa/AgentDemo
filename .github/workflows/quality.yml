@@ -58,6 +58,13 @@ jobs:
         run: uv run --locked --extra dev pytest --cov=app --cov-report=term-missing --cov-fail-under=80 -q
       - name: Audit backend dependencies
         run: uv run --locked --extra dev pip-audit --local --skip-editable
+      - name: Check isolated Fetch MCP lock
+        run: uv lock --project ../mcp/fetch --check
+      - name: Audit Fetch MCP dependencies
+        if: matrix.python-version == '3.12'
+        run: |
+          uv export --project ../mcp/fetch --frozen --no-hashes --no-emit-project --output-file /tmp/agentdemo-fetch.txt
+          uv run --locked --extra dev pip-audit --no-deps --disable-pip -r /tmp/agentdemo-fetch.txt
 
   frontend:
     runs-on: ubuntu-latest

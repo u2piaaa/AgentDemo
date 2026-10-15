@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from app.mcp.client import McpClientManager
 from app.mcp.tools import mcp_tool_to_registered_tool
 from app.services.plugin_registry import PluginRegistry, RegisteredTool
@@ -17,25 +19,38 @@ class UnifiedToolRegistry:
         self._mcp_errors: dict[str, str] = {}
 
     async def refresh_mcp_tools(self) -> None:
-        self._mcp_tools.clear()
-        self._mcp_errors.clear()
         if self.mcp_client is None:
             return
-        for server in self.mcp_client.list_servers():
+        servers = [
+            server for server in self.mcp_client.list_servers() if server["status"] != "disabled"
+        ]
+        results = await asyncio.gather(
+            *(self.mcp_client.list_tools(str(server["name"])) for server in servers),
+            return_exceptions=True,
+        )
+        registered_tools, errors = {}, {}
+        for server, result in zip(servers, results, strict=True):
             server_name = str(server["name"])
-            try:
-                tools = await self.mcp_client.list_tools(server_name)
-            except Exception as exc:  # noqa: BLE001 - one bad MCP server must not hide others.
-                self._mcp_errors[server_name] = str(exc)
+            if isinstance(result, BaseException):
+                errors[server_name] = str(result)
                 continue
-            for tool in tools:
-                registered = mcp_tool_to_registered_tool(
-                    server_name=str(tool["server_name"]),
-                    tool=tool,
-                    client=self.mcp_client,
-                    transport=str(tool.get("transport") or "stdio"),
-                )
-                self._mcp_tools[registered.manifest.name] = registered
+            try:
+                server_tools = {}
+                for tool in result:
+                    registered = mcp_tool_to_registered_tool(
+                        server_name=server_name,
+                        tool=tool,
+                        client=self.mcp_client,
+                        transport=str(server["transport"]),
+                    )
+                    if registered.manifest.name in server_tools:
+                        raise ValueError("Duplicate tool identifier")
+                    server_tools[registered.manifest.name] = registered
+                registered_tools.update(server_tools)
+            except (ValueError, TypeError, KeyError):
+                errors[server_name] = f"MCP server {server_name}: invalid tool catalog"
+        # Readers see one complete snapshot, never a partially refreshed registry.
+        self._mcp_tools, self._mcp_errors = registered_tools, errors
 
     def list_tools(self) -> list[RegisteredTool]:
         tools = [*self.plugin_registry.list_tools(), *self._mcp_tools.values()]
