@@ -143,6 +143,12 @@ before upgrading the backend environment. Keep the existing arguments and
 environment mappings. `mcp/fetch/uv.lock` pins the independent dependency set;
 do not install `mcp-server-fetch` in `backend/.venv`.
 
+GitHub MCP 2.0.2 has been verified against this client with the existing read-only
+tool policy, including its `2026-07-28` structured outputs. For a native install,
+use the [official release](https://github.com/github/github-mcp-server/releases/tag/v2.0.2),
+verify the published checksum, and update the ignored config's `command` path.
+Keep downloaded service binaries under `.local`, outside Git.
+
 Per-server config supports `protocol_mode` (`auto`, `legacy`, `2026-07-28`),
 `request_timeout_seconds` (30), `discovery_timeout_seconds` (15),
 `discovery_cache_seconds` (60), `discovery_max_pages` (20),

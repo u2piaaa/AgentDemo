@@ -215,7 +215,17 @@ Local acceptance:
 - Mobile 390 × 844: composer and Runtime Tools panel fit. Desktop 1440 × 900
   checked. Screenshots remain ignored under `.local/mcp-*-mobile.jpg`.
 
-CI and release commit are recorded after the release gate finishes.
+[GitHub quality run 38706415857](https://github.com/u2piaaa/AgentDemo/actions/runs/38706415857)
+passed Python 3.11/3.12/3.14, PostgreSQL integration, frontend and all dependency
+audits for implementation commit `48ba514`.
+
+The configured native GitHub MCP server was also upgraded from 1.9.0 to
+[2.0.2](https://github.com/github/github-mcp-server/releases/tag/v2.0.2).
+The Windows archive matched the release's SHA-256 checksum. With the existing
+read-only policy, the new process negotiated `2026-07-28` and read this public
+repository's README through `ToolExecutor`, returning validated structured
+content. The check used the existing GitHub CLI authentication in process memory;
+no credentials or downloaded binaries were added to Git.
 
 ## Next iteration handoff
 
