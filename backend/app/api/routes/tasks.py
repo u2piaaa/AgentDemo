@@ -1,4 +1,6 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+import hashlib
+import json
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -91,11 +93,13 @@ async def create_agent_task(
 
     prompt = payload.prompt.strip()
     idempotency_key = payload.idempotency_key.strip() if payload.idempotency_key else None
+    fingerprint = _request_fingerprint(payload)
     if idempotency_key:
         existing = await get_task_by_idempotency_key(
             session, current_user.id, idempotency_key
         )
         if existing is not None:
+            _validate_repeated_request(existing, payload, fingerprint)
             scheduler = getattr(request.app.state, "task_scheduler", None)
             if scheduler is not None and existing.status == TASK_STATUS_QUEUED:
                 scheduler.enqueue(existing.id)
@@ -112,7 +116,9 @@ async def create_agent_task(
         attempt_count=0,
         max_attempts=payload.max_attempts or get_settings().agent_task_default_max_attempts,
         next_attempt_at=datetime.now(UTC),
-        metadata_={"events": []},
+        timeout_seconds=payload.timeout_seconds,
+        deadline_at=datetime.now(UTC) + timedelta(seconds=payload.deadline_seconds),
+        metadata_={"events": [], "request_fingerprint": fingerprint},
     )
     session.add(task)
     try:
@@ -124,6 +130,7 @@ async def create_agent_task(
                 session, current_user.id, idempotency_key
             )
             if existing is not None:
+                _validate_repeated_request(existing, payload, fingerprint)
                 scheduler = getattr(request.app.state, "task_scheduler", None)
                 if scheduler is not None and existing.status == TASK_STATUS_QUEUED:
                     scheduler.enqueue(existing.id)
@@ -168,9 +175,11 @@ async def update_task(
     current_user: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ) -> Task:
-    task = await get_owned_task(session, task_id, current_user.id)
+    task = await get_owned_task(session, task_id, current_user.id, lock=True)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
+    if task.kind == TASK_KIND_AGENT:
+        raise HTTPException(status_code=409, detail="Agent task state is managed by the worker; use cancel to stop it")
     if payload.status is not None:
         validate_task_transition(task, payload.status)
         apply_task_status_timestamps(task, payload.status)
@@ -197,12 +206,17 @@ async def cancel_task(
     current_user: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ) -> Task:
-    task = await get_owned_task(session, task_id, current_user.id)
+    task = await get_owned_task(session, task_id, current_user.id, lock=True)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     validate_task_transition(task, TASK_STATUS_CANCELLED)
     apply_task_status_timestamps(task, TASK_STATUS_CANCELLED)
     task.status = TASK_STATUS_CANCELLED
+    task.run_token = None
+    task.lease_expires_at = None
+    task.next_attempt_at = None
+    if task.replay_blocked_at is not None:
+        task.error = "Cancelled after work started. Review tool history for operations already dispatched."
     await session.commit()
     await session.refresh(task)
     scheduler = getattr(request.app.state, "task_scheduler", None)
@@ -240,12 +254,12 @@ def apply_task_status_timestamps(task: Task, next_status: str) -> None:
         task.finished_at = now
 
 
-async def get_owned_task(session: AsyncSession, task_id: UUID, user_id: UUID) -> Task | None:
+async def get_owned_task(session: AsyncSession, task_id: UUID, user_id: UUID, *, lock: bool = False) -> Task | None:
+    statement = select(Task).where(Task.id == task_id, Task.user_id == user_id)
+    if lock:
+        statement = statement.with_for_update().execution_options(populate_existing=True)
     result = await session.execute(
-        select(Task).where(
-            Task.id == task_id,
-            Task.user_id == user_id,
-        )
+        statement
     )
     return result.scalar_one_or_none()
 
@@ -267,3 +281,20 @@ async def get_task_by_idempotency_key(
 def _agent_task_name(prompt: str) -> str:
     first_line = next((line.strip() for line in prompt.splitlines() if line.strip()), "Agent task")
     return first_line[:80]
+
+
+def _request_fingerprint(payload: AgentTaskCreate) -> str:
+    values = payload.model_dump(mode="json", exclude={"idempotency_key"})
+    values["name"] = (payload.name or _agent_task_name(payload.prompt)).strip()
+    values["max_attempts"] = payload.max_attempts or get_settings().agent_task_default_max_attempts
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
+
+
+def _validate_repeated_request(task: Task, payload: AgentTaskCreate, fingerprint: str) -> None:
+    saved = (task.metadata_ or {}).get("request_fingerprint")
+    matches = saved == fingerprint if saved else (
+        task.kind == TASK_KIND_AGENT and (task.input_ or {}).get("prompt") == payload.prompt
+        and task.conversation_id == payload.conversation_id
+    )
+    if not matches:
+        raise HTTPException(status_code=409, detail="Idempotency key was already used for a different task request")

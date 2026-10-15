@@ -59,6 +59,9 @@ class FakeTaskSession:
     async def execute(self, statement):
         return ScalarResult(self.task)
 
+    async def get(self, model, item_id):
+        return self.task
+
     async def commit(self) -> None:
         self.commit_count += 1
 
@@ -776,7 +779,7 @@ async def test_mcp_tool_call_writes_task_events() -> None:
         tool=(await client.list_tools())[0],
         client=client,
     )
-    task = Task(id=uuid4(), name="MCP call", status="running", progress=0, metadata_={})
+    task = Task(id=uuid4(), name="MCP call", kind="manual", status="running", progress=0, metadata_={})
     session = FakeTaskSession(task)
 
     result = await ToolExecutor().run(

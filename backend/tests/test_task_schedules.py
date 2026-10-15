@@ -23,10 +23,15 @@ class FakeResult:
     def all(self):
         return self.items
 
+    def scalar_one_or_none(self):
+        return None
+
 
 class FakeSession:
     def __init__(self, schedules) -> None:
         self.schedules = schedules
+        for schedule in schedules:
+            schedule.misfire_grace_seconds = 300
         self.added = []
         self.commits = 0
 
@@ -117,6 +122,18 @@ def test_scheduled_task_has_deterministic_occurrence_key_and_retry_policy() -> N
 def test_timezone_validation_rejects_unknown_zone() -> None:
     with pytest.raises(ValueError, match="Unknown IANA timezone"):
         validate_timezone("Mars/Olympus_Mons")
+
+
+@pytest.mark.parametrize(("now", "local_time", "expected"), [
+    # Spring gap: 02:30 does not exist on March 8; skip that local day.
+    (datetime(2026, 3, 8, 5, tzinfo=UTC), "02:30", datetime(2026, 3, 9, 6, 30, tzinfo=UTC)),
+    # Fall fold: choose first 01:30, then never run again in the second fold.
+    (datetime(2026, 11, 1, 4, tzinfo=UTC), "01:30", datetime(2026, 11, 1, 5, 30, tzinfo=UTC)),
+    (datetime(2026, 11, 1, 6, 15, tzinfo=UTC), "01:30", datetime(2026, 11, 2, 6, 30, tzinfo=UTC)),
+])
+def test_daily_dst_gap_and_fold_policy(now, local_time, expected):
+    assert initial_next_run(schedule_kind="daily", timezone_name="America/New_York",
+                            now=now, daily_time=local_time) == expected
 
 
 @pytest.mark.asyncio

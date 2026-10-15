@@ -144,6 +144,8 @@ async def test_response_bytes_timeout_and_recovery():
     with pytest.raises(RuntimeError, match="timed out"):
         await manager.list_tools("remote")
     slow = False
+    # Recovery checks state reset, not a 30ms SDK handshake performance target.
+    manager._get_server("remote").discovery_timeout_seconds = 2
     assert await manager.list_tools("remote") == []
     assert manager.list_servers()[0]["status"] == "ready"
 

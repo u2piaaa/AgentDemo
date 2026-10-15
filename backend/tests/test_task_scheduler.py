@@ -46,6 +46,8 @@ def make_task(status: str, error: str | None = None):
         attempt_count=1,
         max_attempts=1,
         lease_expires_at=None,
+        deadline_at=None,
+        replay_blocked_at=None,
     )
 
 
@@ -204,4 +206,5 @@ async def test_retry_backoff_does_not_hold_concurrency_slot() -> None:
     scheduler.enqueue(second)
     await asyncio.gather(*list(scheduler._jobs.values()))
 
-    assert runner.calls == [first, second, first]
+    # Retry state remains in PostgreSQL until the next poll; no sleeping job.
+    assert runner.calls == [first, second]

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from datetime import UTC, datetime
 from collections.abc import Mapping
 from time import perf_counter
 from typing import Any
@@ -19,6 +20,7 @@ from app.models.tool import ToolCall
 from app.schemas import ToolRunResponse
 from app.services.plugin_registry import TOOL_PROVIDER_MCP_SERVER, RegisteredTool
 from app.services.tool_schema import validate_tool_schema
+from app.services.task_lease import block_replay, current_task_lease, lock_task_lease, TaskLeaseLost
 
 
 logger = logging.getLogger(__name__)
@@ -73,6 +75,18 @@ class ToolExecutor:
 
         try:
             self._validate_arguments(tool, arguments)
+            if task_id is not None and session is not None:
+                task = await lock_task_lease(session)
+                if task is not None:
+                    if task.id != task_id:
+                        raise TaskLeaseLost("Tool task identity does not match execution lease")
+                    block_replay(task, f"Tool dispatched: {tool.manifest.name}"[:200])
+                    # Durable BEFORE dispatch: a crash cannot cause automatic replay.
+                    await session.commit()
+                else:
+                    linked_task = await session.get(Task, task_id)
+                    if linked_task is not None and linked_task.kind == "agent":
+                        raise TaskLeaseLost("Agent tool execution requires a worker lease")
             timeout = min(tool.manifest.timeout_seconds, self.settings.tool_timeout_seconds)
             output = await asyncio.wait_for(
                 self._dispatch_tool(tool, arguments, confirmed=confirmed, identity=identity),
@@ -411,10 +425,18 @@ class ToolExecutor:
     ) -> None:
         if session is None or task_id is None or tool.provider != TOOL_PROVIDER_MCP_SERVER:
             return
-        result = await session.execute(select(Task).where(Task.id == task_id))
+        result = await session.execute(
+            select(Task).where(Task.id == task_id).with_for_update().execution_options(populate_existing=True)
+        )
         task = result.scalar_one_or_none()
         if task is None:
             return
+        if task.kind == "agent":
+            lease = current_task_lease.get()
+            if lease is None or lease.task_id != task.id or lease.token != task.run_token or task.status != "running":
+                return
+            if task.lease_expires_at is None or task.lease_expires_at <= datetime.now(UTC):
+                return
         event = {
             "type": event_type,
             "tool_name": tool.manifest.name,
@@ -424,9 +446,9 @@ class ToolExecutor:
             **payload,
         }
         metadata = dict(task.metadata_ or {})
-        metadata["events"] = [*(metadata.get("events") or []), event]
+        metadata["events"] = [*(metadata.get("events") or []), event][-100:]
         task.metadata_ = metadata
         if progress is not None:
-            task.progress = max(task.progress or 0, progress)
+            task.progress = max(task.progress or 0, min(progress, 95) if task.kind == "agent" else progress)
         if commit:
             await session.commit()

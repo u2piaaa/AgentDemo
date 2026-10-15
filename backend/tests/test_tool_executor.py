@@ -75,6 +75,9 @@ class FakeAuditSession:
     def add(self, item) -> None:
         self.items.append(item)
 
+    async def get(self, model, item_id):
+        return None
+
     async def commit(self) -> None:
         self.commit_count += 1
 

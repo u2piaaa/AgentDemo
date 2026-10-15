@@ -119,6 +119,11 @@ def make_task():
         next_attempt_at=None,
         heartbeat_at=None,
         lease_expires_at=None,
+        run_token=None,
+        timeout_seconds=180,
+        deadline_at=None,
+        replay_blocked_at=None,
+        replay_blocked_reason=None,
     )
 
 
@@ -149,8 +154,8 @@ async def test_agent_task_runner_persists_success_and_runtime_identity() -> None
     assert SuccessfulRuntime.init_kwargs["plugin_registry"] is registry
     assert SuccessfulRuntime.request.task_type == "background"
     assert SuccessfulRuntime.request.message == "Research the topic"
-    assert runner.session_factory.calls == 2
-    assert session.last_get_kwargs == {"with_for_update": {"skip_locked": True}}
+    assert SuccessfulRuntime.init_kwargs["task_id"] == task.id
+    assert task.run_token is None
 
 
 @pytest.mark.asyncio
@@ -306,7 +311,7 @@ async def test_agent_task_runner_requeues_worker_interrupted_by_shutdown() -> No
         await job
 
     assert task.status == "queued"
-    assert task.attempt_count == 0
+    assert task.attempt_count == 1
     assert task.next_attempt_at is not None
     assert task.lease_expires_at is None
 

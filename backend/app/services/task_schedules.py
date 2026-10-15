@@ -96,19 +96,58 @@ async def dispatch_due_schedules(
     schedules = list(result.scalars().all())
     task_ids: list[UUID] = []
     for schedule in schedules:
-        occurrence = _as_utc(schedule.next_run_at or now_utc)
+        schedule.last_dispatch_at = now_utc
+        schedule.last_dispatch_error = None
+        try:
+            occurrence = latest_due_occurrence(schedule, now=now_utc)
+            next_run = next_run_after_occurrence(schedule, now=now_utc)
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            schedule.enabled = False
+            schedule.last_dispatch_status = "invalid"
+            schedule.last_dispatch_error = str(exc)
+            continue
+        schedule.next_run_at = next_run
+        if next_run is None:
+            schedule.enabled = False
+        if (now_utc - occurrence).total_seconds() > schedule.misfire_grace_seconds:
+            schedule.last_dispatch_status = "missed"
+            continue
+        if await active_schedule_task(session, schedule.id) is not None:
+            schedule.last_dispatch_status = "overlap_skipped"
+            continue
         task = build_scheduled_task(schedule, occurrence=occurrence)
         session.add(task)
         await session.flush()
         schedule.last_run_at = occurrence
         schedule.last_task_id = task.id
-        schedule.next_run_at = next_run_after_occurrence(schedule, now=now_utc)
-        if schedule.next_run_at is None:
-            schedule.enabled = False
+        schedule.last_dispatch_status = "queued"
         task_ids.append(task.id)
     if schedules:
         await session.commit()
     return task_ids
+
+
+async def active_schedule_task(session: AsyncSession, schedule_id: UUID) -> Task | None:
+    # Caller holds the schedule row lock, serializing manual and timed dispatch.
+    result = await session.execute(select(Task).where(
+        Task.schedule_id == schedule_id, Task.status.in_(("queued", "running")),
+    ).order_by(Task.created_at).limit(1))
+    return result.scalar_one_or_none()
+
+
+def latest_due_occurrence(schedule: TaskSchedule, *, now: datetime) -> datetime:
+    occurrence = _as_utc(schedule.next_run_at or now)
+    if schedule.schedule_kind == SCHEDULE_KIND_INTERVAL:
+        interval = schedule.interval_seconds or 0
+        if interval < 60:
+            raise ValueError("Stored interval_seconds must be at least 60")
+        occurrence += timedelta(seconds=int((now - occurrence).total_seconds() // interval) * interval)
+    elif schedule.schedule_kind == SCHEDULE_KIND_DAILY:
+        candidate = _next_daily_run(now - timedelta(days=3), schedule.timezone, schedule.daily_time)
+        while candidate <= now:
+            occurrence = max(occurrence, candidate)
+            candidate = _next_daily_run(candidate, schedule.timezone, schedule.daily_time)
+    return occurrence
 
 
 def build_scheduled_task(
@@ -132,6 +171,8 @@ def build_scheduled_task(
         attempt_count=0,
         max_attempts=schedule.max_attempts,
         next_attempt_at=occurrence_utc,
+        timeout_seconds=180,
+        deadline_at=occurrence_utc + timedelta(seconds=900),
         metadata_={
             "events": [],
             "schedule": {
@@ -155,10 +196,16 @@ def _next_daily_run(now_utc: datetime, timezone_name: str, daily_time: str | Non
     zone = ZoneInfo(validate_timezone(timezone_name))
     local_now = now_utc.astimezone(zone)
     candidate_date: date = local_now.date()
-    candidate = datetime.combine(candidate_date, local_time, tzinfo=zone)
-    if candidate <= local_now:
-        candidate = datetime.combine(candidate_date + timedelta(days=1), local_time, tzinfo=zone)
-    return candidate.astimezone(UTC)
+    for offset in range(370):
+        # Fold=0 chooses the first occurrence; never execute twice on a fall-back day.
+        naive = datetime.combine(candidate_date + timedelta(days=offset), local_time)
+        candidate = naive.replace(tzinfo=zone, fold=0).astimezone(UTC)
+        # Nonexistent wall times (spring-forward or a skipped date) do not round-trip.
+        if candidate.astimezone(zone).replace(tzinfo=None) != naive:
+            continue
+        if candidate > now_utc:
+            return candidate
+    raise ValueError("No valid daily occurrence in the next year")
 
 
 def _as_utc(value: datetime) -> datetime:

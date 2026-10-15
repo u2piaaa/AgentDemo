@@ -36,3 +36,7 @@ class TaskSchedule(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         PgUUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL")
     )
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    misfire_grace_seconds: Mapped[int] = mapped_column(Integer, default=300, server_default="300")
+    last_dispatch_status: Mapped[str | None] = mapped_column(String(32))
+    last_dispatch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_dispatch_error: Mapped[str | None] = mapped_column(Text)

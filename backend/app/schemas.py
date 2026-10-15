@@ -138,6 +138,10 @@ class TaskRead(BaseModel):
     next_attempt_at: datetime | None = None
     heartbeat_at: datetime | None = None
     lease_expires_at: datetime | None = None
+    timeout_seconds: int = 180
+    deadline_at: datetime | None = None
+    replay_blocked_at: datetime | None = None
+    replay_blocked_reason: str | None = None
     metadata_: dict[str, Any] = Field(serialization_alias="metadata")
     created_at: datetime
     started_at: datetime | None = None
@@ -157,6 +161,8 @@ class AgentTaskCreate(BaseModel):
     conversation_id: UUID | None = None
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=200)
     max_attempts: int | None = Field(default=None, ge=1, le=10)
+    timeout_seconds: int = Field(default=180, ge=5, le=3600)
+    deadline_seconds: int = Field(default=900, ge=5, le=86400)
 
     @field_validator("prompt")
     @classmethod
@@ -187,6 +193,7 @@ class TaskScheduleCreate(BaseModel):
     interval_minutes: int | None = Field(default=None, ge=1, le=525_600)
     daily_time: str | None = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     max_attempts: int | None = Field(default=None, ge=1, le=10)
+    misfire_grace_seconds: int = Field(default=300, ge=0, le=86400)
 
     @field_validator("prompt")
     @classmethod
@@ -236,6 +243,10 @@ class TaskScheduleRead(BaseModel):
     last_run_at: datetime | None
     last_task_id: UUID | None
     enabled: bool
+    misfire_grace_seconds: int = 300
+    last_dispatch_status: str | None = None
+    last_dispatch_at: datetime | None = None
+    last_dispatch_error: str | None = None
     created_at: datetime
     updated_at: datetime
 

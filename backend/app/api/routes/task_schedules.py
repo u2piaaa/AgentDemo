@@ -12,7 +12,7 @@ from app.db.database import get_session
 from app.models.task import Task
 from app.models.task_schedule import TaskSchedule
 from app.schemas import TaskRead, TaskScheduleCreate, TaskScheduleRead, TaskScheduleUpdate
-from app.services.task_schedules import build_scheduled_task, initial_next_run
+from app.services.task_schedules import active_schedule_task, build_scheduled_task, initial_next_run
 
 router = APIRouter(prefix="/task-schedules", tags=["task-schedules"])
 
@@ -71,6 +71,7 @@ async def create_task_schedule(
         max_attempts=payload.max_attempts or get_settings().agent_task_default_max_attempts,
         next_run_at=next_run_at,
         enabled=True,
+        misfire_grace_seconds=payload.misfire_grace_seconds,
     )
     session.add(schedule)
     await session.commit()
@@ -88,6 +89,7 @@ async def update_task_schedule(
     schedule = await get_owned_schedule(session, schedule_id, current_user.id)
     if schedule is None:
         raise HTTPException(status_code=404, detail="Task schedule not found")
+    schedule.last_dispatch_error = None
     if payload.enabled and (
         schedule.next_run_at is None or schedule.next_run_at <= datetime.now(UTC)
     ):
@@ -118,8 +120,17 @@ async def run_task_schedule_now(
     schedule = await get_owned_schedule(session, schedule_id, current_user.id)
     if schedule is None:
         raise HTTPException(status_code=404, detail="Task schedule not found")
+    existing = await active_schedule_task(session, schedule.id)
+    if existing is not None:
+        return existing
     task = build_scheduled_task(schedule, occurrence=datetime.now(UTC), manual=True)
     session.add(task)
+    await session.flush()
+    schedule.last_task_id = task.id
+    schedule.last_run_at = datetime.now(UTC)
+    schedule.last_dispatch_at = schedule.last_run_at
+    schedule.last_dispatch_status = "queued"
+    schedule.last_dispatch_error = None
     await session.commit()
     await session.refresh(task)
     scheduler = getattr(request.app.state, "task_scheduler", None)
@@ -135,6 +146,6 @@ async def get_owned_schedule(
         select(TaskSchedule).where(
             TaskSchedule.id == schedule_id,
             TaskSchedule.user_id == user_id,
-        )
+        ).with_for_update().execution_options(populate_existing=True)
     )
     return result.scalar_one_or_none()

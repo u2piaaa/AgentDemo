@@ -112,6 +112,10 @@ export type Task = {
   next_attempt_at: string | null;
   heartbeat_at: string | null;
   lease_expires_at: string | null;
+  timeout_seconds?: number;
+  deadline_at?: string | null;
+  replay_blocked_at?: string | null;
+  replay_blocked_reason?: string | null;
   metadata?: Record<string, unknown>;
   created_at: string;
   started_at: string | null;
@@ -132,6 +136,10 @@ export type TaskSchedule = {
   next_run_at: string | null;
   last_run_at: string | null;
   last_task_id: string | null;
+  misfire_grace_seconds?: number;
+  last_dispatch_status?: string | null;
+  last_dispatch_at?: string | null;
+  last_dispatch_error?: string | null;
   enabled: boolean;
   created_at: string;
   updated_at: string;

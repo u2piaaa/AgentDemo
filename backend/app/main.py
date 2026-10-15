@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        app.state.task_scheduler.shutdown()
+        await app.state.task_scheduler.shutdown()
 
 
 def create_app() -> FastAPI:

@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -65,7 +65,11 @@ def is_valid_task_status_transition(current_status: str, next_status: str) -> bo
 
 class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "tasks"
-    __table_args__ = (UniqueConstraint("user_id", "idempotency_key"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "idempotency_key"),
+        Index("ix_tasks_ready_queue", "next_attempt_at", "created_at", "id",
+              postgresql_where=text("kind = 'agent' AND status = 'queued'")),
+    )
 
     user_id: Mapped[UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
@@ -97,6 +101,11 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    run_token: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True))
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=180, server_default="180")
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    replay_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    replay_blocked_reason: Mapped[str | None] = mapped_column(String(200))
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

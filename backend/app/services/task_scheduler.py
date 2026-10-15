@@ -17,9 +17,10 @@ from app.models.task import (
 )
 from app.services.agent_task_runner import AgentTaskRunner
 from app.services.task_schedules import dispatch_due_schedules
+from app.services.task_lease import REPLAY_BLOCKED_ERROR
 
 STALE_TASK_ERROR = "Task lease expired after the final permitted attempt"
-RECOVERED_TASK_ERROR = "Task lease expired; execution was safely re-queued"
+RECOVERED_TASK_ERROR = "Task lease expired before external work; execution was re-queued"
 logger = logging.getLogger(__name__)
 
 
@@ -57,18 +58,25 @@ class TaskScheduler:
         self._started = True
         self._maintenance = loop.create_task(self._maintenance_loop())
 
-    def shutdown(self) -> None:
+    async def shutdown(self) -> None:
+        jobs = list(self._jobs.values())
         if self._maintenance is not None:
+            jobs.append(self._maintenance)
             self._maintenance.cancel()
             self._maintenance = None
         for job in list(self._jobs.values()):
             job.cancel()
+        if jobs:
+            await asyncio.gather(*jobs, return_exceptions=True)
         self._jobs.clear()
         self._started = False
 
     def enqueue(self, task_id: UUID) -> bool:
         current = self._jobs.get(task_id)
         if current is not None and not current.done():
+            return False
+        if len(self._jobs) >= self.max_concurrency * 2:
+            # The durable database queue owns overflow; poll it as capacity frees.
             return False
         try:
             loop = asyncio.get_running_loop()
@@ -93,14 +101,8 @@ class TaskScheduler:
             return await recover_stale_running_tasks(session)
 
     async def _run_job(self, task_id: UUID) -> None:
-        while True:
-            async with self._semaphore:
-                outcome = await self.runner.run(task_id)
-            if outcome.retry_at is None:
-                return
-            delay = max((outcome.retry_at - datetime.now(UTC)).total_seconds(), 0)
-            if delay:
-                await asyncio.sleep(delay)
+        async with self._semaphore:
+            await self.runner.run(task_id)
 
     async def _maintenance_loop(self) -> None:
         while True:
@@ -116,20 +118,22 @@ class TaskScheduler:
         now = datetime.now(UTC)
         async with self.session_factory() as session:
             await recover_stale_running_tasks(session, now=now)
-            scheduled_task_ids = await dispatch_due_schedules(session, now=now)
+            await dispatch_due_schedules(session, now=now)
             result = await session.execute(
                 select(Task.id).where(
                     Task.status == TASK_STATUS_QUEUED,
                     Task.kind == TASK_KIND_AGENT,
                     or_(Task.next_attempt_at.is_(None), Task.next_attempt_at <= now),
-                )
+                ).order_by(Task.next_attempt_at.asc().nullsfirst(), Task.created_at, Task.id)
+                .limit(self.max_concurrency * 2)
             )
             ready_task_ids = list(result.scalars().all())
-        for task_id in dict.fromkeys([*scheduled_task_ids, *ready_task_ids]):
+        for task_id in ready_task_ids:
             self.enqueue(task_id)
 
     def _job_finished(self, task_id: UUID, job: asyncio.Task[None]) -> None:
-        self._jobs.pop(task_id, None)
+        if self._jobs.get(task_id) is job:
+            self._jobs.pop(task_id, None)
         if job.cancelled():
             return
         error = job.exception()
@@ -149,7 +153,13 @@ async def recover_stale_running_tasks(
     """Recover only abandoned tasks whose execution lease has expired."""
 
     now_utc = now or datetime.now(UTC)
-    result = await session.execute(select(Task).where(Task.status == TASK_STATUS_RUNNING))
+    result = await session.execute(
+        select(Task).where(
+            Task.status == TASK_STATUS_RUNNING, Task.kind == TASK_KIND_AGENT,
+            or_(Task.lease_expires_at.is_(None), Task.lease_expires_at <= now_utc),
+        ).order_by(Task.lease_expires_at.asc().nullsfirst(), Task.id)
+        .limit(100).with_for_update(skip_locked=True)
+    )
     tasks = list(result.scalars().all())
     recovered = 0
     for task in tasks:
@@ -158,7 +168,8 @@ async def recover_stale_running_tasks(
             continue
         attempt_count = getattr(task, "attempt_count", 1) or 1
         max_attempts = getattr(task, "max_attempts", 1) or 1
-        if attempt_count < max_attempts:
+        deadline_expired = task.deadline_at is not None and task.deadline_at <= now_utc
+        if attempt_count < max_attempts and task.replay_blocked_at is None and not deadline_expired:
             task.status = TASK_STATUS_QUEUED
             task.error = RECOVERED_TASK_ERROR
             task.finished_at = None
@@ -166,9 +177,11 @@ async def recover_stale_running_tasks(
         else:
             task.status = TASK_STATUS_STALE
             task.finished_at = now_utc
-            if task.error is None:
-                task.error = STALE_TASK_ERROR
+            task.error = (REPLAY_BLOCKED_ERROR if task.replay_blocked_at is not None else
+                          "Task deadline expired during recovery" if deadline_expired else STALE_TASK_ERROR)
+            task.next_attempt_at = None
         task.lease_expires_at = None
+        task.run_token = None
         recovered += 1
     if recovered:
         await session.commit()

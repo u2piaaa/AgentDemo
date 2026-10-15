@@ -12,8 +12,8 @@ boundaries stable.
 | Structured tool use | Local plugins, MCP tools, direct URL/GitHub/Hugging Face/search routes, JSON argument validation, and normalized results. |
 | Human oversight | Confirmation gating and confirmed continuation streams for sensitive interactive calls. |
 | Safety and audit | Central `ToolExecutor` policy, timeouts, output limits, MCP policy, trace ids, and durable `ToolCall` rows. |
-| Background autonomy | Durable agent-task records, row-locked claims, leases/heartbeats, bounded retries, concurrency caps, idempotency, startup recovery, cancellation, results, and task-bound tool audit. |
-| Scheduled autonomy | Timezone-aware one-time, fixed-interval, and daily schedules with pause/resume, immediate runs, deterministic occurrence keys, and catch-up burst prevention. |
+| Background autonomy | Fenced execution tokens, leases/heartbeats, attempt and total deadlines, jittered retries before external work, replay barriers, bounded queues, deduplicated messages, cancellation, and task-bound tool audit. |
+| Scheduled autonomy | Timezone-aware one-time, interval, and daily schedules with overlap prevention, coalesced missed runs, explicit grace windows, DST gap/fold policy, dispatch diagnostics, pause/resume, and idempotent immediate runs while active. |
 | Grounding | Context-enriched chunks, pgvector + multilingual lexical RRF, local MMR, optional Jina v3.5 listwise reranking, source-attributed citations, reindexing, and scoped documents. |
 | Memory | Recent raw history plus bounded incremental summaries with durable source cursors, PostgreSQL concurrency control, and disable/delete retirement boundaries. |
 | Observability | Stable SSE events, persisted trace/model metadata, runtime inspector, task event history, and release coverage gates. |

@@ -157,6 +157,7 @@ export function ScheduleComposer({
         aria-describedby="schedule-timezone-help"
       />
       <small id="schedule-timezone-help">Use an IANA timezone, such as Asia/Hong_Kong.</small>
+      {kind === "daily" ? <small>Daylight saving: skip missing times; run once at the first repeated time.</small> : null}
 
       <label htmlFor="schedule-attempts">Maximum attempts</label>
       <input
@@ -168,6 +169,7 @@ export function ScheduleComposer({
         onChange={(event) => setMaxAttempts(Number(event.target.value))}
       />
 
+      <small>Runs never overlap. After an interruption, only the latest occurrence within 5 minutes is queued. Each run has a 15-minute deadline and a 3-minute attempt limit.</small>
       {validationError ? <p className="inline-error" role="alert">{validationError}</p> : null}
       {error ? <p className="inline-error" role="alert">{error}</p> : null}
       <button

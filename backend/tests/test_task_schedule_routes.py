@@ -33,13 +33,18 @@ class FakeSession:
         self.commits = 0
 
     async def execute(self, statement):
-        return self.results.pop(0)
+        return self.results.pop(0) if self.results else FakeResult()
 
     def add(self, item) -> None:
         self.added.append(item)
 
     async def commit(self) -> None:
         self.commits += 1
+
+    async def flush(self) -> None:
+        for item in self.added:
+            if item.id is None:
+                item.id = uuid4()
 
     async def refresh(self, item) -> None:
         now = datetime.now(UTC)

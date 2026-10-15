@@ -47,6 +47,8 @@ class FakeSession:
         self.committed = True
 
     async def refresh(self, item) -> None:
+        if getattr(item, "timeout_seconds", None) is None:
+            item.timeout_seconds = 180
         if getattr(item, "id", None) is None:
             item.id = uuid4()
         if getattr(item, "created_at", None) is None:
@@ -68,6 +70,8 @@ def make_task(user_id: UUID, conversation_id: UUID | None = None):
         conversation_id=conversation_id,
         name="Index document",
         status="queued",
+        kind="manual",
+        replay_blocked_at=None,
         progress=0,
         error=None,
         result=None,

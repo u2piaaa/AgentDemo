@@ -25,7 +25,7 @@ and audit boundary remain compatibility requirements.
 | 3 | Agent runtime and conversations | Explicit execution/context budgets, cancellation and reliable continuation while preserving graph/SSE semantics | Runtime/route regression tests, protocol sanitization, real confirmation flow | Released: `eaabd47` |
 | 4 | Tools, search and MCP | Current stable MCP protocol capabilities, accurate connection/error state, bounded discovery and execution | MCP/security/executor/search suites; real tool confirmation and history | Released: `48ba514` |
 | 5 | RAG and memory | Context-enriched chunks, hybrid RRF, diversity selection and current listwise reranker integration; reliable incremental memory | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Released: `4964e5c` |
-| 6 | Background tasks and schedules | Deadline/recovery/cancellation correctness and inspectable execution budgets | Worker/scheduler/timezone/concurrency tests; real scheduled task flow | Planned |
+| 6 | Background tasks and schedules | Fenced workers, replay barriers, deadlines, bounded queues, non-overlapping schedules and DST policy | 389 backend tests; real PostgreSQL competition/recovery; desktop/mobile task and schedule flow | Acceptance passed; pending release |
 | 7 | Authentication and API operations | Current password hashing with legacy migration, bounded operational checks and safe defaults | Real PostgreSQL register/login writes; ownership/auth/health tests | Planned |
 | 8 | Frontend workspace | Claude-inspired warm neutral visual system, simpler sidebar/composer and dialogue typography; current React/Vite, resilient streaming and accessible responsive task/runtime controls | Unit tests/build/audit; desktop/mobile browser chat, tools and inspector | Planned |
 | 9 | Integration and release | Reconcile docs/config/migrations and validate the combined app | Full quality gates, migrations, browser acceptance, both remote branches and live process verification | Planned |
@@ -279,3 +279,39 @@ schedules: deadlines, durable recovery, cancellation and timezone/concurrency
 behavior, verified through real task execution. Keep tools inside `ToolExecutor`.
 Normal serving ports 8000/5173 remain stopped until the combined release; acceptance
 uses 8001/5174 and synthetic fixtures only. Never copy those settings to production.
+
+## Iteration 6 — background tasks and scheduling
+
+Implemented worker execution tokens with row-locked fencing across progress,
+heartbeat, final state, message persistence and ToolExecutor dispatch. Retry is
+bounded by attempts and a total deadline, uses jitter and stays in the database
+queue. Cancellation invalidates the token; shutdown awaits cleanup and preserves
+consumed attempts. A durable barrier prevents automatic replay after tool dispatch
+or answer persistence. Retry messages reuse the conversation and user turn.
+Agent task state is worker-owned; conflicting idempotency requests return 409.
+
+Scheduling now coalesces to the latest eligible occurrence, enforces a catch-up
+window, skips overlap, serializes manual/timed dispatch, handles DST gaps/folds,
+and records decisions visible in the inspector. Invalid schedules are isolated.
+Primary-source design notes and delivery limits are in
+[Task execution](task-execution.md).
+
+Local acceptance on 2026-10-15:
+
+- 389 backend tests passed, 1 paid live test deselected; coverage 85.69%.
+- 11 new real-PostgreSQL integration cases cover competing workers, stale-result
+  fencing, cross-process cancellation, deadlines, shutdown, tool replay barriers,
+  message deduplication, schedule competition and idempotency conflicts.
+- Existing worker, route, MCP and security suites passed. One old MCP recovery
+  test now allows normal SDK negotiation time after its intentional timeout.
+- DST fixtures cover the New York spring gap and both fall-back folds.
+- 21 frontend tests, production build, Ruff and offline evaluations (12/12) pass.
+- Fresh schema upgrade, downgrade to 0008 and re-upgrade to 0009 passed in an
+  isolated disposable PostgreSQL database; legacy running work is replay-blocked.
+- Real browser: background success, cancellation while generating, timed automatic
+  execution, pause and manual run while paused; persistence verified after reload.
+  Desktop 1440x900 and mobile 390x844 inspector/composer checks passed. The synthetic
+  model fixture is explicitly labelled; this does not claim paid-provider quality.
+- Acceptance schedule is paused. Test backend is on 8001 and frontend on 5174;
+  stable ports remain idle until combined release. Migration 0009 requires stopping
+  old workers before starting upgraded processes.

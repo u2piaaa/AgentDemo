@@ -85,6 +85,17 @@ function TaskCard({ task, isCancelling, onCancel }: TaskCardProps) {
           Retry at {new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(new Date(task.next_attempt_at))}
         </span>
       ) : null}
+      {task.kind === "agent" ? (
+        <div className="task-meta">
+          <span>Attempt limit: {task.timeout_seconds ?? 180}s</span>
+          {task.deadline_at ? <span>Deadline: {new Intl.DateTimeFormat(undefined, {
+            dateStyle: "short", timeStyle: "short"
+          }).format(new Date(task.deadline_at))}</span> : null}
+        </div>
+      ) : null}
+      {task.replay_blocked_at && ["failed", "stale", "cancelled"].includes(task.status) ? (
+        <p className="inline-error">Review conversation and tool history before starting another task. Work may already have completed.</p>
+      ) : null}
       {events.length ? (
         <div className="task-events" aria-label="Latest task events">
           {events.slice(-3).map((event, index) => (

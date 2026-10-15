@@ -209,20 +209,26 @@ Supported operations:
   id, and metadata.
 - `POST /api/tasks/agent` creates and immediately enqueues an autonomous agent
   task from a prompt, with optional name, conversation id, idempotency key, and
-  maximum-attempt policy.
+  maximum-attempt policy, `timeout_seconds` (default 180) and
+  `deadline_seconds` (default 900, measured from creation).
 - `GET /api/tasks/{task_id}` returns an owned task.
-- `PATCH /api/tasks/{task_id}` updates status, progress, result, error, trace id,
-  or metadata.
+- `PATCH /api/tasks/{task_id}` updates manual task records. Agent task state is
+  worker-owned; attempts to patch it return 409.
 - `POST /api/tasks/{task_id}/cancel` moves a cancellable task to `cancelled`.
 
 Statuses are `queued`, `running`, `succeeded`, `failed`, `cancelled`, and
 `stale`. Terminal states stay terminal. Workers claim execution with a renewable
-lease and heartbeat. On startup, a live lease is preserved; an expired lease is
-re-queued when attempts remain and becomes `stale` only after its final attempt.
-Transient and unknown provider failures use bounded exponential backoff, while
+lease, unique execution token and heartbeat. Every task write, saved answer and
+tool dispatch checks ownership. Expired workers cannot overwrite a replacement.
+Recovery retries only before any tool dispatch or saved answer, within the
+attempt and total deadline budgets; uncertain work becomes `stale` for review.
+Transient and unknown provider failures use jittered exponential backoff, while
 authentication, validation, permission, and confirmation failures stop
 immediately. The process-wide worker pool limits concurrent model runs, and retry
-delays do not occupy a concurrency slot.
+delays stay in PostgreSQL and do not occupy a concurrency slot or sleeping job.
+Cancellation invalidates the token immediately; other processes observe it via
+their heartbeat. Graceful shutdown awaits worker cleanup without resetting the
+attempt budget. Reusing an idempotency key for different input returns 409.
 
 Scheduled Agent execution is mounted at `/api/task-schedules`:
 
@@ -231,12 +237,16 @@ Scheduled Agent execution is mounted at `/api/task-schedules`:
   `daily` schedule.
 - `PATCH /api/task-schedules/{schedule_id}` pauses or resumes a schedule.
 - `POST /api/task-schedules/{schedule_id}/run` queues an immediate manual
-  occurrence without changing its normal next-run time.
+  occurrence without changing its normal next-run time; while an earlier run
+  is queued/running, this returns that existing task.
 
 Every scheduled occurrence receives a deterministic, user-scoped idempotency
-key, so concurrent scheduler ticks cannot create duplicate work. Missed interval
-runs advance to the next future occurrence instead of producing a catch-up
-burst. Each background run persists coarse-grained runtime events, the final
+key, so concurrent scheduler ticks cannot create duplicate work. Missed runs
+coalesce to the most recent occurrence and are dispatched only within
+`misfire_grace_seconds` (default 300); overlapping occurrences are skipped.
+Daily schedules skip nonexistent daylight-saving times and choose the first
+occurrence of a repeated time, once per local day. Dispatch decisions and invalid
+schedule errors are visible in the inspector. Each run persists runtime events, the final
 answer, citations, model route, timestamps, progress, attempt count, next retry,
 heartbeat, and lease. Tool calls retain the task id in the normal `ToolExecutor`
 audit path.
@@ -246,7 +256,8 @@ LangGraph runtime. Tools that require interactive confirmation fail safely with
 guidance to use chat; they are never auto-approved. The frontend can launch or
 schedule a prompt from the composer, pause/resume or immediately run schedules,
 and renders progress, retry state, result text, failure details, and cancellation
-controls in the Runtime inspector.
+controls in the Runtime inspector. See [Task execution and schedules](docs/task-execution.md)
+for migration instructions, delivery limits and recovery behavior.
 
 See [Agent Architecture and Roadmap](docs/agent-architecture-roadmap.md) for the
 implemented capability map and next-stage priorities.

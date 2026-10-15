@@ -39,6 +39,7 @@ from app.services.model_gateway import ModelGateway
 from app.services.plugin_registry import TOOL_PROVIDER_MCP_SERVER, PluginRegistry
 from app.services.rag import Citation, RagService
 from app.services.tool_executor import ToolExecutor
+from app.services.task_lease import block_replay, lock_task_lease
 from app.services.tool_approvals import ToolApprovalStore
 
 logger = logging.getLogger(__name__)
@@ -1407,6 +1408,7 @@ class AgentRuntime(AgentResponsePolicy):
         result = await self.session.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)
+            .where(Message.metadata_["agent_task_id"].astext.is_distinct_from(str(self.task_id)))
             .where(Message.role.in_(("user", "assistant")))
             .where(Message.content != "")
             .order_by(Message.created_at.desc(), Message.id.desc())
@@ -1443,6 +1445,7 @@ class AgentRuntime(AgentResponsePolicy):
     ) -> None:
         if history or conversation.title.strip() != "New conversation":
             return
+        await lock_task_lease(self.session)
         conversation.title = self._summarize_title(message)
         await self.session.commit()
 
@@ -1480,6 +1483,18 @@ class AgentRuntime(AgentResponsePolicy):
         metadata: dict | None = None,
         model_name: str | None = None,
     ) -> None:
+        task = await lock_task_lease(self.session)
+        if task is not None:
+            metadata = {**(metadata or {}), "agent_task_id": str(task.id)}
+            existing = await self.session.execute(select(Message.id).where(
+                Message.conversation_id == conversation_id, Message.role == role,
+                Message.metadata_["agent_task_id"].astext == str(task.id),
+            ).limit(1))
+            if existing.scalar_one_or_none() is not None:
+                await self.session.commit()
+                return
+            if role == "assistant":
+                block_replay(task, "Assistant answer saved")
         self.session.add(
             Message(
                 conversation_id=conversation_id,

@@ -30,6 +30,16 @@ export function formatScheduleTime(value: string | null): string {
   }).format(new Date(value));
 }
 
+export function dispatchDescription(status: string | null | undefined): string {
+  const labels: Record<string, string> = {
+    queued: "Last dispatch: queued",
+    missed: "Skipped: outside the allowed catch-up window",
+    overlap_skipped: "Skipped: previous run still queued or running",
+    invalid: "Paused: schedule needs correction"
+  };
+  return status ? labels[status] ?? status : "Waiting for first run";
+}
+
 export function ScheduleList({
   schedules,
   error,
@@ -64,6 +74,9 @@ export function ScheduleList({
               <span className="schedule-next">
                 Next: {formatScheduleTime(schedule.next_run_at)}
               </span>
+              <p className="muted">{dispatchDescription(schedule.last_dispatch_status)}</p>
+              <span className="schedule-next">No overlapping runs · Catch-up window: {schedule.misfire_grace_seconds ?? 300}s</span>
+              {schedule.last_dispatch_error ? <p className="inline-error">{schedule.last_dispatch_error}</p> : null}
               <div className="schedule-actions">
                 <button
                   className="background-task-button compact"
