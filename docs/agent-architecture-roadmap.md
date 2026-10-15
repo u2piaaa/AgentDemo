@@ -14,8 +14,8 @@ boundaries stable.
 | Safety and audit | Central `ToolExecutor` policy, timeouts, output limits, MCP policy, trace ids, and durable `ToolCall` rows. |
 | Background autonomy | Durable agent-task records, row-locked claims, leases/heartbeats, bounded retries, concurrency caps, idempotency, startup recovery, cancellation, results, and task-bound tool audit. |
 | Scheduled autonomy | Timezone-aware one-time, fixed-interval, and daily schedules with pause/resume, immediate runs, deterministic occurrence keys, and catch-up burst prevention. |
-| Grounding | pgvector-backed RAG with multilingual keyword fallback, source-attributed citations, MCP resource import, and scoped documents. |
-| Memory | Recent conversation history plus generated long-term summaries. |
+| Grounding | Context-enriched chunks, pgvector + multilingual lexical RRF, local MMR, optional Jina v3.5 listwise reranking, source-attributed citations, reindexing, and scoped documents. |
+| Memory | Recent raw history plus bounded incremental summaries with durable source cursors, PostgreSQL concurrency control, and disable/delete retirement boundaries. |
 | Observability | Stable SSE events, persisted trace/model metadata, runtime inspector, task event history, and release coverage gates. |
 | Quality controls | Scenario-scored agent evaluations, backend lint/coverage, frontend unit tests/build/audit, migration checks, and real API/browser smoke tests. |
 

@@ -24,7 +24,7 @@ and audit boundary remain compatibility requirements.
 | 2 | Model gateway | Provider-neutral configuration, bounded retries/timeouts, robust streaming and embedding validation | Deterministic transport fault tests; no duplicated streamed tokens; existing model/runtime tests | Released: `4535e3c` |
 | 3 | Agent runtime and conversations | Explicit execution/context budgets, cancellation and reliable continuation while preserving graph/SSE semantics | Runtime/route regression tests, protocol sanitization, real confirmation flow | Released: `eaabd47` |
 | 4 | Tools, search and MCP | Current stable MCP protocol capabilities, accurate connection/error state, bounded discovery and execution | MCP/security/executor/search suites; real tool confirmation and history | Released: `48ba514` |
-| 5 | RAG and memory | Context-enriched chunks, hybrid RRF, diversity selection and current listwise reranker integration; reliable incremental memory | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Planned |
+| 5 | RAG and memory | Context-enriched chunks, hybrid RRF, diversity selection and current listwise reranker integration; reliable incremental memory | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Released: `4964e5c` |
 | 6 | Background tasks and schedules | Deadline/recovery/cancellation correctness and inspectable execution budgets | Worker/scheduler/timezone/concurrency tests; real scheduled task flow | Planned |
 | 7 | Authentication and API operations | Current password hashing with legacy migration, bounded operational checks and safe defaults | Real PostgreSQL register/login writes; ownership/auth/health tests | Planned |
 | 8 | Frontend workspace | Claude-inspired warm neutral visual system, simpler sidebar/composer and dialogue typography; current React/Vite, resilient streaming and accessible responsive task/runtime controls | Unit tests/build/audit; desktop/mobile browser chat, tools and inspector | Planned |
@@ -266,13 +266,15 @@ Acceptance before release: 375 backend tests pass against PostgreSQL/pgvector
 deterministic agent evaluations pass 12/12. Real browser checks cover upload,
 existing-document reindex, context-aware queries, listwise HTTP contract, cited
 answer persistence after reload, and 390px/1440px responsive layouts. Final source
-review and remote CI precede merging into `run`. The isolated acceptance database is `agent_upgrade_20261015`; HTTP model,
+review passed. [Implementation CI](https://github.com/u2piaaa/AgentDemo/actions/runs/38713177552)
+passed on Python 3.11/3.12/3.14 with frontend and dependency audit gates.
+Implementation `4964e5c` is released through `test` and `run`. The isolated acceptance database is `agent_upgrade_20261015`; HTTP model,
 MCP and reranking fixtures remain under ignored `.local`. They validate application
 plumbing and deterministic retrieval behavior, not neural model benchmark quality.
 
 ## Next iteration handoff
 
-After iteration 5 acceptance/release, iteration 6 upgrades background tasks and
+Iteration 6 upgrades background tasks and
 schedules: deadlines, durable recovery, cancellation and timezone/concurrency
 behavior, verified through real task execution. Keep tools inside `ToolExecutor`.
 Normal serving ports 8000/5173 remain stopped until the combined release; acceptance
