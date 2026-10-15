@@ -28,7 +28,7 @@ and audit boundary remain compatibility requirements.
 | 6 | Background tasks and schedules | Fenced workers, replay barriers, deadlines, bounded queues, non-overlapping schedules and DST policy | 389 backend tests; real PostgreSQL competition/recovery; desktop/mobile task and schedule flow | Released: `336f760` |
 | 7 | Authentication and API operations | Argon2id migration, expiring/revocable sessions, shared admission limits, resilient login and bounded readiness | 416 backend tests; PostgreSQL concurrency/migrations; real browser registration, logout, expiry and outage recovery | Released: `3d42d8c` |
 | 8 | Frontend workspace | Claude-inspired warm neutral visual system, simpler sidebar/composer and dialogue typography; current React/Vite, resilient streaming and accessible responsive task/runtime controls | 38 frontend tests/build/audit; 417 backend tests; desktop/mobile browser chat, tools and inspector | Released: `770a664` |
-| 9 | Integration and release | Reconcile docs/config/migrations and validate the combined app | Full quality gates, migrations, browser acceptance, both remote branches and live process verification | Final acceptance in progress |
+| 9 | Integration and release | Reconcile docs/config/migrations and validate the combined app | 422 backend tests, 38 frontend tests, migrations, real-provider browser acceptance and live process verification | Released: `517c604`, `9b6cc21` |
 
 Each module gets a substantive, measured improvement. Preview features and
 infrastructure migrations are adopted only when they solve an observed need
@@ -393,3 +393,55 @@ Local acceptance on 2026-10-15:
 and [stable CI 38725923927](https://github.com/u2piaaa/AgentDemo/actions/runs/38725923927)
 passed all matrix checks. Implementation `770a664` was released through `test`
 to `run`; the stable frontend was installed from the lockfile and built with Node 24.
+
+## Iteration 9 — integrated release
+
+All nine iterations are complete. The stable database was backed up and upgraded
+from `0008_task_schedules` through `0010_auth_sessions` with old workers stopped.
+Existing row counts were preserved before adding synthetic acceptance data.
+Backup archives, configuration, credentials, test data and screenshots remain
+ignored local artifacts. The reproducible startup and recovery sequence is in
+[Release operations](release-operations.md).
+
+Final live acceptance on 2026-10-15:
+
+- Stable backend/frontend serve 8000/5173 from the `run` checkout. Readiness
+  reports database/schema ready through the frontend proxy. Node 24 runs Vite 8;
+  backend dependency compatibility and a clean frontend install/build pass.
+- Real registration, login, streaming model response and conversation writes pass
+  using a separate synthetic account. Logout and all-session revocation were
+  verified; the browser is left at login for the user's own account.
+- A synthetic document was embedded by the configured real provider. The model
+  answered its unique lookup correctly, with document/section attribution and
+  visible Hybrid RRF + MMR evidence. The optional hosted listwise reranker remains
+  opt-in; its protocol and fallback were tested with labelled fixtures in iteration 5.
+- A real background task completed on its first attempt and persisted its answer,
+  citations and events. Schedule/DST, fencing and recovery acceptance remain covered
+  by the real-PostgreSQL suites and iteration 6 browser checks.
+- Fetch, GitHub and Hugging Face MCP report ready. Fetch negotiates 2025-11-25;
+  GitHub/Hugging Face negotiate 2026-07-28. GitHub uses the existing CLI credential
+  in process memory with the configured read-only mode, without saving the token.
+- Real GitHub browsing exposed two integration gaps: a bare `README` request
+  selected a directory, and embedded resource bodies were omitted from model text.
+  The planner now resolves that conventional filename and asks for approval before
+  unrelated retrieval. Embedded text resource bodies enter the same bounded,
+  audited `ToolExecutor` result; resource links are not fetched implicitly.
+- A GitHub TLS timeout was correctly reported as failure. A fresh approved request
+  subsequently retrieved the actual README and generated a three-point summary
+  with its source. Approval completion, saved output and tool history agree.
+- Desktop/mobile light and dark workspace checks pass, including responsive
+  drawers, keyboard focus, stop, Markdown, pending approvals, sources and tasks.
+  The final stable browser check reports no console warnings or errors.
+- Temporary acceptance servers on 8001/5174/8021/8022 were stopped. The normal
+  loopback services and PostgreSQL remain available. No public tunnel was opened.
+
+Final quality evidence: **422 backend tests**, one opt-in paid live test deselected,
+**86.31% coverage**, **38 frontend tests**, production build, Ruff and 12/12
+deterministic evaluations pass. CI also verifies fresh PostgreSQL migration,
+integration suites, Python 3.11/3.12/3.14 and dependency audits.
+
+[Planner/release CI 38727231060](https://github.com/u2piaaa/AgentDemo/actions/runs/38727231060),
+[MCP integration CI 38728048001](https://github.com/u2piaaa/AgentDemo/actions/runs/38728048001)
+and [stable CI 38728257673](https://github.com/u2piaaa/AgentDemo/actions/runs/38728257673)
+passed. Implementations `517c604` and `9b6cc21` are released on both public branches;
+this final ledger records the combined acceptance without changing runtime code.
