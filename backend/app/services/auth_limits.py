@@ -1,11 +1,10 @@
 """Shared fixed-window admission limits before expensive password verification."""
 
 import hashlib
-import math
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from fastapi import HTTPException, Request
-from sqlalchemy import case, delete, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +13,10 @@ from app.models.user import AuthRateLimit
 
 
 async def admit_auth_request(session: AsyncSession, request: Request, username: str) -> None:
-    settings, now = get_settings(), datetime.now(UTC)
+    settings = get_settings()
+    # Evaluate time inside PostgreSQL, including after waiting for a bucket lock.
+    # Worker start times and clocks can differ from the request that opened the window.
+    now = func.clock_timestamp()
     ip = request.client.host if request.client else "unknown"
     # Do not parse client-supplied forwarding headers. Proxy trust belongs in ASGI configuration.
     buckets = [(f"ip:{ip}", settings.auth_rate_ip_limit),
@@ -29,10 +31,11 @@ async def admit_auth_request(session: AsyncSession, request: Request, username: 
             "count": case((expired, 1), else_=AuthRateLimit.count + 1),
             "reset_at": case((expired, now + timedelta(seconds=settings.auth_rate_window_seconds)),
                              else_=AuthRateLimit.reset_at),
-        }).returning(AuthRateLimit.count, AuthRateLimit.reset_at)
-        count, reset_at = (await session.execute(statement)).one()
+        }).returning(AuthRateLimit.count,
+                     func.ceil(func.extract("epoch", AuthRateLimit.reset_at - now)))
+        count, remaining_seconds = (await session.execute(statement)).one()
         if count > limit:
-            retry_after = max(retry_after, math.ceil((reset_at - now).total_seconds()))
+            retry_after = max(1, min(settings.auth_rate_window_seconds, int(remaining_seconds)))
             break
     # Bounded cleanup; no raw usernames/IPs/tokens are retained in this table.
     await session.execute(delete(AuthRateLimit).where(AuthRateLimit.key.in_(

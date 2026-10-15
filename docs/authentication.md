@@ -29,7 +29,8 @@ token; a temporary failure remains visible and can be retried.
 Login and registration share PostgreSQL-backed fixed-window admission limits:
 30 attempts per source IP and 10 per source IP + normalized username in 60
 seconds. This limits work before expensive hashing and remains effective across
-workers. Responses use HTTP 429 and `Retry-After`. Counters persist after failed
+workers. PostgreSQL's clock determines windows and remaining wait time after row
+lock acquisition. Responses use HTTP 429 and `Retry-After`. Counters persist after failed
 password checks and expired buckets are cleaned in bounded batches. Stored keys
 are hashes; this is data minimization, not anonymous analytics. The app does not
 parse forwarding headers. Configure trusted proxies in the ASGI deployment;
