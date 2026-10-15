@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import {
   cancelTask,
+  ApiError,
   cancelToolApproval,
   checkAccessToken,
   clearAccessToken,
@@ -55,6 +56,7 @@ import {
   getTaskSchedules,
   getTools,
   login,
+  logout,
   register,
   setAccessToken,
   setAuthToken,
@@ -166,6 +168,11 @@ export function App() {
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [authRetry, setAuthRetry] = useState(0);
+  const [bootstrapError, setBootstrapError] = useState("");
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
   const [authError, setAuthError] = useState("");
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -205,14 +212,18 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    getAuthStatus()
-      .then(async (accessStatus) => {
+    let active = true;
+    setIsCheckingAuth(true);
+    setBootstrapError("");
+    async function restoreSession() {
+      try {
+        const accessStatus = await getAuthStatus();
+        if (!active) return;
         setAccessRequired(accessStatus.required);
         if (accessStatus.required) {
           const isAllowed = await checkAccessToken();
           if (!isAllowed) {
             clearAccessToken();
-            clearAuthToken();
             setHasAccess(false);
             setCurrentUser(null);
             return;
@@ -220,19 +231,44 @@ export function App() {
         }
         setHasAccess(true);
         try {
-          setCurrentUser(await getCurrentUser());
-        } catch {
-          clearAuthToken();
-          setCurrentUser(null);
+          const user = await getCurrentUser();
+          if (active) setCurrentUser(user);
+        } catch (error) {
+          if (!active) return;
+          if (error instanceof ApiError && error.status === 401) {
+            clearAuthToken();
+            setCurrentUser(null);
+          } else {
+            throw error;
+          }
         }
-      })
-      .catch(() => {
-        clearAccessToken();
-        clearAuthToken();
-        setHasAccess(false);
-        setCurrentUser(null);
-      })
-      .finally(() => setIsCheckingAuth(false));
+      } catch (error) {
+        if (active) setBootstrapError(error instanceof Error ? error.message : "Service is unavailable");
+      } finally {
+        if (active) setIsCheckingAuth(false);
+      }
+    }
+    void restoreSession();
+    return () => { active = false; };
+  }, [authRetry]);
+
+  useEffect(() => {
+    function expired() {
+      resetWorkspace();
+      setAuthError("Session expired. Please sign in again.");
+    }
+    function accessRequired() {
+      resetWorkspace();
+      clearAccessToken();
+      setAccessRequired(true);
+      setHasAccess(false);
+    }
+    window.addEventListener("agent-session-expired", expired);
+    window.addEventListener("agent-access-required", accessRequired);
+    return () => {
+      window.removeEventListener("agent-session-expired", expired);
+      window.removeEventListener("agent-access-required", accessRequired);
+    };
   }, []);
 
   useEffect(() => {
@@ -240,21 +276,30 @@ export function App() {
       setIsLoadingMcp(false);
       return;
     }
+    let active = true;
+    const failed = (error: unknown) => {
+      if (active && !(error instanceof DOMException && error.name === "AbortError")) {
+        setStatus(error instanceof Error ? error.message : "Could not load workspace");
+      }
+    };
     getConversations().then((items) => {
+      if (!active) return;
       setConversations(items);
       setActiveConversationId(items[0]?.id ?? null);
-    });
-    getTools().then(setTools);
+    }).catch(failed);
+    getTools().then((items) => { if (active) setTools(items); }).catch(failed);
     setIsLoadingMcp(true);
     Promise.all([getMcpServers(), getMcpResources(), getMcpPrompts()])
       .then(([servers, resources, prompts]) => {
+        if (!active) return;
         setMcpServers(servers);
         setMcpResources(resources);
         setMcpPrompts(prompts);
         setMcpError("");
       })
-      .catch((error) => setMcpError(error instanceof Error ? error.message : "Failed to load MCP"))
-      .finally(() => setIsLoadingMcp(false));
+      .catch((error) => { if (active) setMcpError(error instanceof Error ? error.message : "Failed to load MCP"); })
+      .finally(() => { if (active) setIsLoadingMcp(false); });
+    return () => { active = false; };
   }, [currentUser]);
 
   async function refreshMcp() {
@@ -298,8 +343,10 @@ export function App() {
     ) {
       return;
     }
+    let active = true;
     Promise.all([getMessages(activeConversationId), getDocuments(activeConversationId)]).then(
       ([loadedMessages, loadedDocuments]) => {
+        if (!active) return;
         setMessages(loadedMessages);
         setDocuments(loadedDocuments);
         const filteredTraces = (() => {
@@ -318,7 +365,10 @@ export function App() {
         );
         setCitations(extractLatestCitations(loadedMessages));
       }
-    );
+    ).catch((error) => {
+      if (active) setStatus(error instanceof Error ? error.message : "Could not load conversation");
+    });
+    return () => { active = false; };
   }, [activeConversationId, isStreaming]);
 
   function updateExecutionTrace(
@@ -472,9 +522,13 @@ export function App() {
       setAccessTokenInput("");
       try {
         setCurrentUser(await getCurrentUser());
-      } catch {
-        clearAuthToken();
-        setCurrentUser(null);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          clearAuthToken();
+          setCurrentUser(null);
+        } else {
+          setBootstrapError(error instanceof Error ? error.message : "Service is unavailable");
+        }
       }
     } catch (error) {
       clearAccessToken();
@@ -485,7 +539,8 @@ export function App() {
   async function handleAuthSubmit(event: FormEvent) {
     event.preventDefault();
     const username = authUsername.trim();
-    if (!username || !authPassword) return;
+    if (!username || !authPassword || isAuthenticating) return;
+    setIsAuthenticating(true);
     setAuthError("");
 
     try {
@@ -499,15 +554,32 @@ export function App() {
     } catch (error) {
       clearAuthToken();
       setAuthError(error instanceof Error ? error.message : "Authentication failed");
+    } finally {
+      setIsAuthenticating(false);
     }
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    setIsLoggingOut(true);
+    setLogoutError("");
+    try {
+      await logout();
+      resetWorkspace();
+    } catch (error) {
+      setLogoutError(error instanceof Error ? error.message : "Could not revoke session. Retry logout.");
+    } finally {
+      setIsLoggingOut(false);
+    }
+  }
+
+  function resetWorkspace() {
     clearAuthToken();
     setCurrentUser(null);
     setConversations([]);
     setActiveConversationId(null);
     setMessages([]);
+    setInput("");
+    setIsStreaming(false);
     setTools([]);
     setDocuments([]);
     setTasks([]);
@@ -518,6 +590,10 @@ export function App() {
     executionTraceRef.current = {};
     setExecutionTraces({});
     setConfirmationDecisions({});
+    setMcpServers([]);
+    setMcpResources([]);
+    setMcpPrompts([]);
+    setLogoutError("");
     setStatus("Idle");
     setIsSidebarOpen(false);
     setIsInspectorOpen(false);
@@ -1082,6 +1158,15 @@ export function App() {
     );
   }
 
+  if (bootstrapError) {
+    return <main className="auth-screen"><div className="auth-panel">
+      <h1>Workspace unavailable</h1>
+      <p className="auth-lead">Your saved sign-in is preserved. Retry when the service is available.</p>
+      <p className="auth-error" role="alert">{bootstrapError}</p>
+      <button className="primary-action" onClick={() => setAuthRetry((value) => value + 1)}>Retry connection</button>
+    </div></main>;
+  }
+
   if (accessRequired && !hasAccess) {
     return (
       <main className="auth-screen">
@@ -1156,14 +1241,15 @@ export function App() {
             type="password"
             value={authPassword}
             onChange={(event) => setAuthPassword(event.target.value)}
-            autoComplete="current-password"
-            minLength={4}
+            autoComplete={authMode === "register" ? "new-password" : "current-password"}
+            minLength={authMode === "register" ? 15 : 4}
             maxLength={128}
           />
-          {authError ? <p className="auth-error">{authError}</p> : null}
-          <button className="primary-action">
+          {authMode === "register" ? <p className="muted">Use a passphrase of at least 15 characters.</p> : null}
+          {authError ? <p className="auth-error" role="alert">{authError}</p> : null}
+          <button className="primary-action" disabled={isAuthenticating}>
             {authMode === "login" ? <LogIn size={18} aria-hidden="true" /> : <UserPlus size={18} aria-hidden="true" />}
-            {authMode === "login" ? "Login" : "Create account"}
+            {isAuthenticating ? "Signing in…" : authMode === "login" ? "Login" : "Create account"}
           </button>
         </form>
       </main>
@@ -1239,9 +1325,10 @@ export function App() {
             <UserIcon size={17} aria-hidden="true" />
             <div><span>Signed in as</span><strong>{currentUser.username}</strong></div>
           </div>
-          <button className="sidebar-logout" type="button" onClick={handleLogout}>
+          {logoutError ? <p className="inline-error" role="alert">{logoutError}</p> : null}
+          <button className="sidebar-logout" type="button" onClick={handleLogout} disabled={isLoggingOut}>
             <LogOut size={17} aria-hidden="true" />
-            Log out
+            {isLoggingOut ? "Signing out…" : "Log out"}
           </button>
         </div>
       </aside>

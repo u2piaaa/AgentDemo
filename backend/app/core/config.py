@@ -13,8 +13,17 @@ class Settings(BaseSettings):
     environment: str = "local"
     database_url: str = "postgresql+asyncpg://agent:agent@localhost:5432/agent_demo"
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
-    cors_origin_regex: str | None = r"https?://.*"
+    cors_origin_regex: str | None = r"https?://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?"
     agent_access_token: str = ""
+    auth_session_ttl_seconds: int = Field(default=604800, ge=60, le=2592000)
+    auth_session_idle_seconds: int = Field(default=86400, ge=60, le=2592000)
+    auth_max_sessions: int = Field(default=5, ge=1, le=100)
+    auth_rate_window_seconds: int = Field(default=60, ge=1, le=3600)
+    auth_rate_ip_limit: int = Field(default=30, ge=1, le=10000)
+    auth_rate_account_limit: int = Field(default=10, ge=1, le=1000)
+    database_connect_timeout_seconds: float = Field(default=5, gt=0, le=60)
+    database_command_timeout_seconds: float = Field(default=15, gt=0, le=300)
+    health_timeout_seconds: float = Field(default=2, gt=0, le=30)
     plugin_dir: Path = Path("../plugins")
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"

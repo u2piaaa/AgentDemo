@@ -20,6 +20,17 @@ class AuthCredentials(BaseModel):
         return value.strip()
 
 
+class RegisterCredentials(AuthCredentials):
+    password: str = Field(min_length=15, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def require_passphrase(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Password must contain non-whitespace characters")
+        return value
+
+
 class UserRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -30,6 +41,7 @@ class UserRead(BaseModel):
 class AuthResponse(BaseModel):
     token: str
     user: UserRead
+    expires_at: datetime
 
 
 class ConversationCreate(BaseModel):

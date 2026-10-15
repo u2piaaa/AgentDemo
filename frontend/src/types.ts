@@ -13,6 +13,7 @@ export type User = {
 export type AuthResponse = {
   token: string;
   user: User;
+  expires_at: string;
 };
 
 export type Message = {

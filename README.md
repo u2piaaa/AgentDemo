@@ -353,8 +353,14 @@ cd D:\workplace\AgentDemo\backend
 The backend exposes two unauthenticated operational probes:
 
 - `GET /api/health` is a lightweight process liveness check.
-- `GET /api/health/ready` verifies the database connection and returns HTTP 503
-  with an unavailable status when PostgreSQL cannot be reached.
+- `GET /api/health/ready` verifies the database connection and required migration
+  revision within a bounded deadline, returning HTTP 503 when unavailable or outdated.
+
+Authentication uses Argon2id with automatic legacy-password migration, expiring
+server-revocable sessions and shared login admission limits. The browser preserves
+login during temporary outages and retries restoration without discarding its token.
+See [Authentication and API operations](docs/authentication.md) for defaults,
+deployment configuration and migration behavior.
 
 Install and start the frontend:
 

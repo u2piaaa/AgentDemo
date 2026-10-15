@@ -20,6 +20,30 @@ import { readBrowserStorage, removeBrowserStorage, writeBrowserStorage } from ".
 const jsonHeaders = { "Content-Type": "application/json" };
 let authToken = readBrowserStorage("agent_auth_token");
 let accessToken = readBrowserStorage("agent_access_token");
+let sessionRequests = new AbortController();
+
+export class ApiError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
+async function request(url: string, init: RequestInit = {}): Promise<Response> {
+  const startedWithToken = authToken;
+  const signals = [sessionRequests.signal];
+  if (init.signal) signals.push(init.signal);
+  if (url.startsWith("/api/auth/")) signals.push(AbortSignal.timeout(15000));
+  const response = await fetch(url, { ...init, signal: AbortSignal.any(signals) });
+  if (response.status === 401 && startedWithToken && startedWithToken === authToken
+      && !["/api/auth/login", "/api/auth/register"].includes(url)) {
+    const detail = await response.clone().json().catch(() => ({}));
+    const accessRequired = detail.code === "access_token_required";
+    clearAuthToken();
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event(accessRequired ? "agent-access-required" : "agent-session-expired"));
+    }
+    throw new ApiError(401, accessRequired ? "Project access token required" : "Session expired. Please sign in again.");
+  }
+  return response;
+}
 
 function accessHeaders(token = accessToken): Record<string, string> {
   return token ? { "x-agent-access-token": token } : {};
@@ -37,11 +61,15 @@ function jsonAuthHeaders(): Record<string, string> {
 }
 
 export function setAuthToken(token: string) {
+  sessionRequests.abort();
+  sessionRequests = new AbortController();
   authToken = token;
   writeBrowserStorage("agent_auth_token", token);
 }
 
 export function clearAuthToken() {
+  sessionRequests.abort();
+  sessionRequests = new AbortController();
   authToken = "";
   removeBrowserStorage("agent_auth_token");
 }
@@ -57,105 +85,111 @@ export function clearAccessToken() {
 }
 
 export async function getAuthStatus(): Promise<{ required: boolean }> {
-  const response = await fetch("/api/auth/status");
+  const response = await request("/api/auth/status");
   if (!response.ok) throw new Error("Failed to load auth status");
   return response.json();
 }
 
 export async function checkAccessToken(token = accessToken): Promise<boolean> {
-  const response = await fetch("/api/auth/check", {
+  const response = await request("/api/auth/check", {
     method: "POST",
     headers: accessHeaders(token)
   });
-  if (!response.ok) return false;
+  if (!response.ok) throw new ApiError(response.status, "Could not check project access");
   const payload = await response.json();
   return Boolean(payload.ok);
 }
 
 export async function register(username: string, password: string): Promise<AuthResponse> {
-  const response = await fetch("/api/auth/register", {
+  const response = await request("/api/auth/register", {
     method: "POST",
-    headers: jsonHeaders,
+    headers: { ...jsonHeaders, ...accessHeaders() },
     body: JSON.stringify({ username, password })
   });
-  if (!response.ok) throw new Error(await readError(response, "Registration failed"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Registration failed"));
   return response.json();
 }
 
 export async function login(username: string, password: string): Promise<AuthResponse> {
-  const response = await fetch("/api/auth/login", {
+  const response = await request("/api/auth/login", {
     method: "POST",
-    headers: jsonHeaders,
+    headers: { ...jsonHeaders, ...accessHeaders() },
     body: JSON.stringify({ username, password })
   });
-  if (!response.ok) throw new Error(await readError(response, "Login failed"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Login failed"));
   return response.json();
 }
 
+export async function logout(): Promise<void> {
+  const response = await request("/api/auth/logout", { method: "POST", headers: authHeaders() });
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Could not revoke session. Retry logout."));
+  clearAuthToken();
+}
+
 export async function getCurrentUser(): Promise<User> {
-  const response = await fetch("/api/auth/me", { headers: authHeaders() });
-  if (!response.ok) throw new Error(await readError(response, "Authentication required"));
+  const response = await request("/api/auth/me", { headers: authHeaders() });
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Authentication required"));
   return response.json();
 }
 
 export async function getConversations(): Promise<Conversation[]> {
-  const response = await fetch("/api/conversations", { headers: authHeaders() });
-  if (!response.ok) throw new Error(await readError(response, "Failed to load conversations"));
+  const response = await request("/api/conversations", { headers: authHeaders() });
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to load conversations"));
   return response.json();
 }
 
 export async function getMessages(conversationId: string): Promise<Message[]> {
-  const response = await fetch(`/api/conversations/${conversationId}/messages`, {
+  const response = await request(`/api/conversations/${conversationId}/messages`, {
     headers: authHeaders()
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to load messages"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to load messages"));
   return response.json();
 }
 
 export async function getTools(): Promise<ToolManifest[]> {
-  const response = await fetch("/api/tools", { headers: authHeaders() });
-  if (!response.ok) throw new Error(await readError(response, "Failed to load tools"));
+  const response = await request("/api/tools", { headers: authHeaders() });
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to load tools"));
   return response.json();
 }
 
 export async function getMcpServers(): Promise<McpServer[]> {
-  const response = await fetch("/api/mcp/servers", { headers: authHeaders() });
-  if (!response.ok) throw new Error(await readError(response, "Failed to load MCP servers"));
+  const response = await request("/api/mcp/servers", { headers: authHeaders() });
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to load MCP servers"));
   return response.json();
 }
 
 export async function refreshMcpServers(): Promise<McpServer[]> {
-  const response = await fetch("/api/mcp/refresh", { method: "POST", headers: authHeaders() });
-  if (!response.ok) throw new Error(await readError(response, "Failed to refresh MCP servers"));
+  const response = await request("/api/mcp/refresh", { method: "POST", headers: authHeaders() });
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to refresh MCP servers"));
   return response.json();
 }
 
 export async function getMcpResources(): Promise<McpResource[]> {
-  const response = await fetch("/api/mcp/resources", { headers: authHeaders() });
-  if (!response.ok) throw new Error(await readError(response, "Failed to load MCP resources"));
+  const response = await request("/api/mcp/resources", { headers: authHeaders() });
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to load MCP resources"));
   return response.json();
 }
 
 export async function getMcpPrompts(): Promise<McpPrompt[]> {
-  const response = await fetch("/api/mcp/prompts", { headers: authHeaders() });
-  if (!response.ok) throw new Error(await readError(response, "Failed to load MCP prompts"));
+  const response = await request("/api/mcp/prompts", { headers: authHeaders() });
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to load MCP prompts"));
   return response.json();
 }
 
 export async function getDocuments(conversationId: string | null): Promise<KnowledgeDocument[]> {
   const query = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : "";
-  const response = await fetch(`/api/knowledge/documents${query}`, { headers: authHeaders() });
-  if (!response.ok) throw new Error(await readError(response, "Failed to load documents"));
+  const response = await request(`/api/knowledge/documents${query}`, { headers: authHeaders() });
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to load documents"));
   return response.json();
 }
 
 export async function createConversation(title = "New conversation"): Promise<Conversation> {
-  const response = await fetch("/api/conversations", {
+  const response = await request("/api/conversations", {
     method: "POST",
     headers: jsonAuthHeaders(),
     body: JSON.stringify({ title })
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to create conversation"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to create conversation"));
   return response.json();
 }
 
@@ -163,21 +197,21 @@ export async function updateConversationTitle(
   conversationId: string,
   title: string
 ): Promise<Conversation> {
-  const response = await fetch(`/api/conversations/${conversationId}`, {
+  const response = await request(`/api/conversations/${conversationId}`, {
     method: "PATCH",
     headers: jsonAuthHeaders(),
     body: JSON.stringify({ title })
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to update conversation title"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to update conversation title"));
   return response.json();
 }
 
 export async function deleteConversation(conversationId: string): Promise<void> {
-  const response = await fetch(`/api/conversations/${conversationId}`, {
+  const response = await request(`/api/conversations/${conversationId}`, {
     method: "DELETE",
     headers: authHeaders()
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to delete conversation"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to delete conversation"));
 }
 
 export async function uploadDocument(
@@ -189,28 +223,28 @@ export async function uploadDocument(
   if (conversationId) {
     form.append("conversation_id", conversationId);
   }
-  const response = await fetch("/api/knowledge/documents/upload", {
+  const response = await request("/api/knowledge/documents/upload", {
     method: "POST",
     headers: authHeaders(),
     body: form
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to upload document"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to upload document"));
   return response.json();
 }
 
 export async function getTasks(conversationId: string | null): Promise<Task[]> {
   const query = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : "";
-  const response = await fetch(`/api/tasks${query}`, { headers: authHeaders() });
-  if (!response.ok) throw new Error(await readError(response, "Failed to load tasks"));
+  const response = await request(`/api/tasks${query}`, { headers: authHeaders() });
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to load tasks"));
   return response.json();
 }
 
 export async function reindexDocument(documentId: string): Promise<KnowledgeDocument> {
-  const response = await fetch(`/api/knowledge/documents/${encodeURIComponent(documentId)}/reindex`, {
+  const response = await request(`/api/knowledge/documents/${encodeURIComponent(documentId)}/reindex`, {
     method: "POST",
     headers: authHeaders()
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to reindex document"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to reindex document"));
   return response.json();
 }
 
@@ -218,21 +252,21 @@ export async function createAgentTask(
   prompt: string,
   conversationId: string | null
 ): Promise<Task> {
-  const response = await fetch("/api/tasks/agent", {
+  const response = await request("/api/tasks/agent", {
     method: "POST",
     headers: jsonAuthHeaders(),
     body: JSON.stringify({ prompt, conversation_id: conversationId })
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to create background task"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to create background task"));
   return response.json();
 }
 
 export async function cancelTask(taskId: string): Promise<Task> {
-  const response = await fetch(`/api/tasks/${taskId}/cancel`, {
+  const response = await request(`/api/tasks/${taskId}/cancel`, {
     method: "POST",
     headers: authHeaders()
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to cancel task"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to cancel task"));
   return response.json();
 }
 
@@ -240,20 +274,20 @@ export async function getTaskSchedules(
   conversationId: string | null
 ): Promise<TaskSchedule[]> {
   const query = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : "";
-  const response = await fetch(`/api/task-schedules${query}`, { headers: authHeaders() });
-  if (!response.ok) throw new Error(await readError(response, "Failed to load schedules"));
+  const response = await request(`/api/task-schedules${query}`, { headers: authHeaders() });
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to load schedules"));
   return response.json();
 }
 
 export async function createTaskSchedule(
   payload: TaskScheduleCreateInput
 ): Promise<TaskSchedule> {
-  const response = await fetch("/api/task-schedules", {
+  const response = await request("/api/task-schedules", {
     method: "POST",
     headers: jsonAuthHeaders(),
     body: JSON.stringify(payload)
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to create schedule"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to create schedule"));
   return response.json();
 }
 
@@ -261,21 +295,21 @@ export async function setTaskScheduleEnabled(
   scheduleId: string,
   enabled: boolean
 ): Promise<TaskSchedule> {
-  const response = await fetch(`/api/task-schedules/${scheduleId}`, {
+  const response = await request(`/api/task-schedules/${scheduleId}`, {
     method: "PATCH",
     headers: jsonAuthHeaders(),
     body: JSON.stringify({ enabled })
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to update schedule"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to update schedule"));
   return response.json();
 }
 
 export async function runTaskScheduleNow(scheduleId: string): Promise<Task> {
-  const response = await fetch(`/api/task-schedules/${scheduleId}/run`, {
+  const response = await request(`/api/task-schedules/${scheduleId}/run`, {
     method: "POST",
     headers: authHeaders()
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to run schedule"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to run schedule"));
   return response.json();
 }
 
@@ -284,12 +318,12 @@ export async function streamChat(
   conversationId: string | null,
   onEvent: (event: StreamEvent) => void
 ): Promise<void> {
-  const response = await fetch("/api/conversations/chat/stream", {
+  const response = await request("/api/conversations/chat/stream", {
     method: "POST",
     headers: jsonAuthHeaders(),
     body: JSON.stringify({ message, conversation_id: conversationId })
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to start chat stream"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to start chat stream"));
   if (!response.body) throw new Error("Failed to start chat stream: empty response body");
 
   await readEventStream(response.body, onEvent);
@@ -306,7 +340,7 @@ export async function streamConfirmedTool(
   },
   onEvent: (event: StreamEvent) => void
 ): Promise<void> {
-  const response = await fetch("/api/conversations/chat/confirm/stream", {
+  const response = await request("/api/conversations/chat/confirm/stream", {
     method: "POST",
     headers: jsonAuthHeaders(),
     body: JSON.stringify({
@@ -318,19 +352,19 @@ export async function streamConfirmedTool(
       reason: payload.reason ?? "Confirmed by the user."
     })
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to continue tool call"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to continue tool call"));
   if (!response.body) throw new Error("Failed to continue tool call: empty response body");
 
   await readEventStream(response.body, onEvent);
 }
 
 export async function cancelToolApproval(conversationId: string, approvalId: string): Promise<void> {
-  const response = await fetch("/api/conversations/chat/confirm/cancel", {
+  const response = await request("/api/conversations/chat/confirm/cancel", {
     method: "POST",
     headers: jsonAuthHeaders(),
     body: JSON.stringify({ conversation_id: conversationId, approval_id: approvalId })
   });
-  if (!response.ok) throw new Error(await readError(response, "Failed to cancel tool approval"));
+  if (!response.ok) throw new ApiError(response.status, await readError(response, "Failed to cancel tool approval"));
 }
 
 async function readEventStream(

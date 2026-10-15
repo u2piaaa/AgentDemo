@@ -19,6 +19,7 @@ from app.api.routes import (
     tools,
 )
 from app.core.config import get_settings
+from app.core.security import secrets_equal
 from app.mcp.client import McpClientManager
 from app.mcp.config import load_mcp_config
 from app.mcp.registry import UnifiedToolRegistry
@@ -38,12 +39,22 @@ class AccessTokenMiddleware(BaseHTTPMiddleware):
         is_health_path = request.url.path == "/api/health" or request.url.path.startswith(
             "/api/health/"
         )
-        if is_health_path or request.url.path.startswith("/api/auth"):
+        if is_health_path or request.url.path in {"/api/auth/status", "/api/auth/check"}:
             return await call_next(request)
         token = request.headers.get("x-agent-access-token")
-        if token != settings.agent_access_token:
-            return JSONResponse({"detail": "Invalid access token"}, status_code=401)
+        if not secrets_equal(token, settings.agent_access_token):
+            return JSONResponse({"detail": "Invalid access token", "code": "access_token_required"}, status_code=401)
         return await call_next(request)
+
+
+class AuthResponseHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/api/auth/"):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
 
 @asynccontextmanager
@@ -66,6 +77,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
     app.add_middleware(AccessTokenMiddleware)
+    app.add_middleware(AuthResponseHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

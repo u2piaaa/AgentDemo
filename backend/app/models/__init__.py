@@ -4,10 +4,11 @@ from app.models.knowledge import KnowledgeChunk, KnowledgeDocument
 from app.models.task import Task
 from app.models.task_schedule import TaskSchedule
 from app.models.tool import Tool, ToolCall
-from app.models.user import User, UserSession
+from app.models.user import AuthRateLimit, User, UserSession
 
 __all__ = [
     "Base",
+    "AuthRateLimit",
     "Conversation",
     "KnowledgeChunk",
     "KnowledgeDocument",

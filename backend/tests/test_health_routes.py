@@ -4,11 +4,16 @@ import pytest
 from starlette.responses import JSONResponse
 
 from app.api.routes.health import readiness
+from app.api.routes.health import REQUIRED_SCHEMA
 
 
 class ReadySession:
     async def execute(self, statement):
-        assert str(statement) == "SELECT 1"
+        assert str(statement) == "SELECT version_num FROM alembic_version"
+        return self
+
+    def scalar_one_or_none(self):
+        return REQUIRED_SCHEMA
 
 
 class UnavailableSession:
@@ -20,7 +25,7 @@ class UnavailableSession:
 async def test_readiness_reports_database_available() -> None:
     response = await readiness(ReadySession())  # type: ignore[arg-type]
 
-    assert response == {"status": "ready", "database": "ok"}
+    assert response == {"status": "ready", "database": "ok", "schema": "ok"}
 
 
 @pytest.mark.asyncio

@@ -26,7 +26,7 @@ and audit boundary remain compatibility requirements.
 | 4 | Tools, search and MCP | Current stable MCP protocol capabilities, accurate connection/error state, bounded discovery and execution | MCP/security/executor/search suites; real tool confirmation and history | Released: `48ba514` |
 | 5 | RAG and memory | Context-enriched chunks, hybrid RRF, diversity selection and current listwise reranker integration; reliable incremental memory | Retrieval quality fixtures; ownership and memory tests; real document/query flow | Released: `4964e5c` |
 | 6 | Background tasks and schedules | Fenced workers, replay barriers, deadlines, bounded queues, non-overlapping schedules and DST policy | 389 backend tests; real PostgreSQL competition/recovery; desktop/mobile task and schedule flow | Released: `336f760` |
-| 7 | Authentication and API operations | Current password hashing with legacy migration, bounded operational checks and safe defaults | Real PostgreSQL register/login writes; ownership/auth/health tests | Planned |
+| 7 | Authentication and API operations | Argon2id migration, expiring/revocable sessions, shared admission limits, resilient login and bounded readiness | 416 backend tests; PostgreSQL concurrency/migrations; real browser registration, logout, expiry and outage recovery | Validated locally; release checks pending |
 | 8 | Frontend workspace | Claude-inspired warm neutral visual system, simpler sidebar/composer and dialogue typography; current React/Vite, resilient streaming and accessible responsive task/runtime controls | Unit tests/build/audit; desktop/mobile browser chat, tools and inspector | Planned |
 | 9 | Integration and release | Reconcile docs/config/migrations and validate the combined app | Full quality gates, migrations, browser acceptance, both remote branches and live process verification | Planned |
 
@@ -274,9 +274,9 @@ plumbing and deterministic retrieval behavior, not neural model benchmark qualit
 
 ## Next iteration handoff
 
-Iteration 6 upgrades background tasks and
-schedules: deadlines, durable recovery, cancellation and timezone/concurrency
-behavior, verified through real task execution. Keep tools inside `ToolExecutor`.
+Iteration 8 upgrades the frontend with the user's Claude-style direction and
+current stable React/Vite tooling. Preserve tool confirmation, runtime inspection,
+RAG sources, task/schedule controls and the module 7 authentication recovery flow.
 Normal serving ports 8000/5173 remain stopped until the combined release; acceptance
 uses 8001/5174 and synthetic fixtures only. Never copy those settings to production.
 
@@ -320,3 +320,34 @@ Local acceptance on 2026-10-15:
 passed all Python 3.11/3.12/3.14 backend checks, PostgreSQL migrations and tests,
 frontend checks and dependency audits. Implementation commit `336f760` is
 released through `test` to `run` with this acceptance ledger.
+
+## Iteration 7 — authentication and API operations
+
+Implemented Argon2id passwords with legacy PBKDF2 rehash on successful login,
+bounded hashing threads, expiring and server-revocable opaque sessions, serialized
+session caps and PostgreSQL admission limits shared across workers. Registration
+uses long passphrases while existing accounts retain password compatibility.
+Project access gates now include registration/login. Default CORS is limited to
+loopback and explicit origins, and auth responses cannot be cached.
+
+Readiness checks the required migration within a deadline. Database connection
+failures produce a generic retryable 503. Missing bearer credentials are rejected
+before database acquisition. The browser preserves login during temporary outages,
+waits for server-side logout, aborts old session requests and handles expiration.
+Full design, configuration and migration notes are in
+[Authentication and API operations](authentication.md).
+
+Local acceptance on 2026-10-15:
+
+- 416 backend tests passed, one paid live test deselected; coverage 86.27%.
+- 26 frontend tests, production build, Ruff and 12/12 offline evaluations passed.
+- Backend dependency audit reported no known vulnerabilities.
+- Real PostgreSQL tests cover registration/login, legacy rehash, ownership,
+  expiration, logout/all-session revocation, concurrent caps and rate limits.
+- Fresh migration, downgrade to 0009, then upgrade to 0010 passed in a disposable
+  database; old tokens were not renewed and password hashes remained unchanged.
+- Real browser registration, legacy-account login, logout and expired-session
+  recovery passed. Stopping the backend displayed Retry connection; restarting
+  restored the same account, conversation and documents without another login.
+- Acceptance remains isolated on ports 8001/5174 with synthetic credentials and
+  labelled model fixtures. Normal stable ports remain idle until iteration 9.
