@@ -14,6 +14,12 @@ warm visual style, safe Markdown answers, cancellable streams and responsive
 runtime drawers. The [upgrade ledger](docs/upgrade-2026-10.md) records each
 module's implementation and acceptance evidence.
 
+For a complete Chinese walkthrough, open the standalone
+[illustrated project guide](docs/AgentDemo-项目介绍.html) in a browser. It includes
+12 architecture and flow diagrams, request-path examples, source links, and
+interview practice covering the whole application. It works offline and supports
+printing to PDF; source links require internet access.
+
 ## Repository Layout
 
 - `backend/app/main.py`: FastAPI application startup, route mounting, scheduler
